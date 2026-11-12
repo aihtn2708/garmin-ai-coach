@@ -58,9 +58,12 @@
   }
 
   // The local server stamps data-mode="local" on the page it serves; a static host cannot.
+  // The Cloudflare Worker stamps data-mode="relay". With neither stamp, the page is a demo.
   function detectMode() {
-    if (document.documentElement.dataset.mode === "local") return token ? "local" : "local-no-token";
-    return window.CoachCore ? "browser" : "local-no-token";
+    const stamp = document.documentElement.dataset.mode;
+    if (stamp === "local") return token ? "local" : "local-no-token";
+    if (!window.CoachCore) return "local-no-token";
+    return stamp === "relay" ? "relay" : "browser";
   }
 
   let state = null;
@@ -94,7 +97,7 @@
     $("step-garmin").classList.toggle("done", g.connected);
     if (g.connected) {
       $("garmin-state").textContent = g.demo
-        ? (backend ? "Built-in sample data is loaded. This page never contacts Garmin." : "Using built-in sample data. Nothing is requested from Garmin.")
+        ? (state.mode === "browser" ? "Built-in sample data is loaded. This page never contacts Garmin." : "Using built-in sample data. Nothing is requested from Garmin.")
         : `Connected. Access renews automatically until your key expires${g.token_expires_at ? "; current token valid until " + new Date(g.token_expires_at * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : ""}.`;
     }
 
@@ -179,7 +182,7 @@
   function updateComposer() {
     let need = "";
     if (!token && !backend) need = "This tab has no session token. Open the link printed in the terminal.";
-    else if (!state.garmin.connected) need = backend ? "Load the sample data to start." : "Connect Garmin or load the sample data to start.";
+    else if (!state.garmin.connected) need = state.mode === "browser" ? "Load the sample data to start." : "Connect Garmin or load the sample data to start.";
     else if (!(state.provider.name && state.provider.model)) need = "Choose an AI model to start.";
     $("need").textContent = need;
     const off = Boolean(need) || busy;
@@ -241,7 +244,7 @@
     wipeArmed = 0;
     e.target.textContent = "Forget everything";
     render(await api("/api/wipe", {}));
-    if (backend) render(await api("/api/garmin/connect", { demo: true }));  // the demo always has its sample data
+    if (state.mode === "browser") render(await api("/api/garmin/connect", { demo: true }));  // the demo always has its sample data
     resetThread();
     lastId = 0; entries = []; renderLog();
     $("provider").replaceChildren(); render(state);
@@ -571,7 +574,7 @@
   // ── outbound log ──────────────────────────────────────────────────────────
   let lastId = 0;
   let entries = [];
-  const KIND = { garmin: "Garmin (your data source)", model: "AI provider", "local-model": "Local model (this computer)" };
+  const KIND = { garmin: "Garmin (your data source)", "garmin-relay": "Garmin, through your Cloudflare Worker", model: "AI provider", "local-model": "Local model (this computer)" };
 
   async function pollLog() {
     if (!token && !backend) return;
@@ -629,6 +632,19 @@
   // ── start ─────────────────────────────────────────────────────────────────
   (async () => {
     const mode = detectMode();
+    if (mode === "relay") {
+      // Served by the owner's Cloudflare Worker, which relays Garmin requests on this address.
+      backend = window.CoachCore.createBackend({ garminRelay: `${location.origin}/garmin` });
+      document.body.classList.add("mode-relay");
+      $("brand-where").textContent = "running in this browser tab, reaching Garmin through your Cloudflare Worker";
+      $("welcome-text").textContent =
+        "Your keys stay in this tab's memory and are forgotten when you close or reload it. Requests for your " +
+        "Garmin data pass through the Cloudflare Worker that serves this page, which forwards them to Garmin " +
+        "and stores nothing. Questions and filtered data go straight from this tab to the AI model you choose. " +
+        "The log on the right shows every request.";
+      $("remember-off").textContent = "Keys are held in this tab's memory and forgotten when you close or reload it.";
+      $("quit").hidden = true;
+    }
     if (mode === "browser") {
       // Hosted page: a demo on sample data. Garmin refuses requests from web pages,
       // so real data needs the local app; this page never asks for a Garmin key.

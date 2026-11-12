@@ -128,10 +128,13 @@ test("Garmin client: bad key, token refresh, cache, path allowlist, test overrid
     await assert.rejects(client.get(bad), core.GarminError);
   }
   assert.ok(!JSON.stringify(ledger.entries()).includes("good-key"));
-  assert.equal(new core.GarminClient("k", new core.Egress(new core.Ledger()), "https://evil.example").baseUrl, "https://personal.connectapi.garmin.com");
+  // The client only ever talks to a relay on the page's own address (or a loopback stand-in).
+  for (const bad of ["https://evil.example", "https://personal.connectapi.garmin.com", undefined]) {
+    assert.throws(() => new core.GarminClient("k", new core.Egress(new core.Ledger()), bad), /own relay/);
+  }
 });
 
-test("the hosted page never sends a Garmin key anywhere", async () => {
+test("the demo page (no relay) never sends a Garmin key anywhere", async () => {
   let calls = 0;
   const backend = core.createBackend({ fetch: async () => { calls++; return new Response("x"); } });
   await assert.rejects(backend.api("/api/garmin/connect", { api_key: "my-real-key" }), /sample data only/);
@@ -146,7 +149,7 @@ test("the hosted page never sends a Garmin key anywhere", async () => {
 test("a provider the browser cannot reach gives a clear message, not a crash", async () => {
   const eg = new core.Egress(new core.Ledger(), async () => { throw new TypeError("Failed to fetch"); });
   await assert.rejects(core.listModels("deepseek", "k", eg), /could not reach DeepSeek/);
-  await assert.rejects(new core.GarminClient("k", eg).connect(), /could not reach Garmin/);
+  await assert.rejects(new core.GarminClient("k", eg, "http://127.0.0.1:9").connect(), /Could not reach the relay/);
 });
 
 test("full session in the page engine: OpenAI format with Gemini thought signature", async () => {
@@ -204,4 +207,74 @@ test("OpenRouter requests ask to refuse hosts that train; Anthropic format round
     assert.equal(second.messages.at(-2).content[1].type, "tool_use");
     assert.ok("system" in second);
   } finally { core.PROVIDERS.openrouter.base_url = savedOr; core.PROVIDERS.anthropic.base_url = savedAn; }
+});
+
+// ── the Cloudflare Worker relay ─────────────────────────────────────────────
+test("Cloudflare relay: only its own page, only the read-only list, nothing but Garmin", async () => {
+  const { relay } = await import("../cloudflare/worker.js");
+  const env = { TEST_GARMIN_UPSTREAM: urls.garmin };
+  const call = (method, pathAndQuery, headers = {}) => {
+    const url = new URL("https://coach.example.workers.dev/garmin" + pathAndQuery);
+    return relay(new Request(url, { method, headers }), url, env);
+  };
+  const own = { "Sec-Fetch-Site": "same-origin", "X-Coach-Relay": "1" };
+  const TOKEN = "/personalapitoken-service/personal-api/personal-api-key/token";
+  const SLEEP = "/sleep-service/sleep/dailySleepSummariesByDate?startDate=2026-10-01&endDate=2026-10-03";
+
+  // Requests that did not come from the Worker's own page are refused before anything is forwarded.
+  assert.equal((await call("POST", TOKEN, { Authorization: "ApiKey good-key" })).status, 403);
+  assert.equal((await call("POST", TOKEN, { ...own, "Sec-Fetch-Site": "cross-site", Authorization: "ApiKey good-key" })).status, 403);
+  assert.equal((await call("POST", TOKEN, { "Sec-Fetch-Site": "same-origin", Authorization: "ApiKey good-key" })).status, 403);
+
+  // Anything off the read-only list is refused.
+  for (const [method, p] of [["GET", "/upload-service/upload"], ["POST", "/userprofile-service/userprofile/settings"],
+    ["DELETE", "/activity-service/activity/123"], ["GET", TOKEN], ["GET", "/activity-service/activity/1/../../x"],
+    ["GET", "/sleep-service/sleep/dailySleep?" + "x".repeat(500)], ["PUT", SLEEP]]) {
+    assert.equal((await call(method, p, { ...own, Authorization: "Bearer aaaaaaaaaaaa" })).status, 404, `${method} ${p}`);
+  }
+  // Credentials must be present and of the right kind for the path.
+  assert.equal((await call("GET", SLEEP, own)).status, 401);
+  assert.equal((await call("GET", SLEEP, { ...own, Authorization: "ApiKey good-key" })).status, 401);
+  assert.equal((await call("POST", TOKEN, { ...own, Authorization: "Bearer aaaaaaaaaaaa" })).status, 401);
+
+  // A wrong key is passed through to Garmin, whose answer comes back as is.
+  assert.equal((await call("POST", TOKEN, { ...own, Authorization: "ApiKey wrong-key" })).status, 401);
+
+  // The happy path, with no CORS headers and no caching on the way back.
+  const first = await call("POST", TOKEN, { ...own, Authorization: "ApiKey good-key" });
+  assert.equal(first.status, 200);
+  await first.text();
+  const tokenRes = await call("POST", TOKEN, { ...own, Authorization: "ApiKey good-key" }); // the mock rejects its first token once
+  const token = (await tokenRes.text()).trim();
+  const data = await call("GET", SLEEP, { ...own, Authorization: `Bearer ${token}`, Cookie: "session=should-not-be-forwarded" });
+  assert.equal(data.status, 200);
+  assert.equal((await data.json()).length, 3);
+  assert.equal(data.headers.get("Cache-Control"), "no-store");
+  assert.equal(data.headers.get("Access-Control-Allow-Origin"), null);
+
+  // The upstream can only be Garmin, or a stand-in on this machine during tests.
+  const evil = await relay(new Request("https://w.example/garmin" + TOKEN, { method: "POST", headers: { ...own, Authorization: "ApiKey good-key" } }),
+    new URL("https://w.example/garmin" + TOKEN), { TEST_GARMIN_UPSTREAM: "https://evil.example" });
+  assert.notEqual(evil.status, 200); // went to the real Garmin host (unreachable or rejected here), never to evil.example
+  const src = require("node:fs").readFileSync(path.join(ROOT, "cloudflare", "worker.js"), "utf8");
+  assert.ok(!/console\.|\.put\(|caches\./.test(src), "the Worker must not log or store");
+});
+
+test("relay mode in the page engine: Garmin through the relay address, end to end", async () => {
+  const saved = core.PROVIDERS.gemini.base_url;
+  core.PROVIDERS.gemini.base_url = urls.openai;
+  try {
+    const backend = core.createBackend({ garminRelay: urls.garmin });
+    const st = await backend.api("/api/garmin/connect", { api_key: "good-key" });
+    assert.equal(st.mode, "relay");
+    assert.equal(st.garmin.connected, true);
+    await backend.api("/api/provider/models", { provider: "gemini", api_key: "k" });
+    await backend.api("/api/provider/select", { provider: "gemini", model: "gemini-9.9-flash" });
+    const events = [];
+    await backend.chat("How did I sleep?", (e) => events.push(e));
+    assert.equal(events.at(-1).type, "answer");
+    const { entries } = await backend.api("/api/ledger?since=0");
+    assert.ok(entries.some((e) => e.kind === "garmin-relay" && e.path.startsWith("/sleep-service/")));
+    assert.ok(!JSON.stringify(entries).includes("good-key"));
+  } finally { core.PROVIDERS.gemini.base_url = saved; }
 });

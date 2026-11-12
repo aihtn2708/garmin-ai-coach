@@ -3,26 +3,31 @@
 The design goal: your Garmin data and your keys stay under your control, and you
 can see everything that leaves your computer.
 
-There are two versions with the same interface and the same filtering.
+There are three versions with the same interface and the same filtering, in order
+of how much you have to trust anything outside your own computer.
 
-| | Local app (`python run.py`) | Hosted demo (GitHub Pages) |
-|---|---|---|
-| Garmin data | Your own, through your Personal API key | Built-in sample data only |
-| Why | | Garmin's API refuses requests from web pages (no CORS headers). The only way round is a relay server, which would see your key. This project does not use one |
-| Where the logic runs | A Python program on `127.0.0.1` | In the page (`docs/core.js`) |
-| Garmin key | In the Python program's memory; the page never holds it | Never asked for; the page's policy forbids contacting Garmin |
-| AI provider key | In the Python program's memory | In the tab's memory |
-| Keys between sessions | Optional OS keychain | Never stored |
+| | Local app (`python run.py`) | Your Cloudflare Worker | Demo (GitHub Pages) |
+|---|---|---|---|
+| Garmin data | Your own | Your own | Built-in sample data only |
+| How Garmin is reached | Directly from a Python program on your computer | Through the Worker's relay, in your Cloudflare account | Never |
+| Who sees your Garmin key and data in transit | You and Garmin | You, Garmin, and Cloudflare's network (the Worker forwards and keeps nothing) | Nobody; never asked for |
+| Where keys are held | Python program's memory; the page never holds them | The browser tab's memory | AI key only, in the tab's memory |
+| Keys between sessions | Optional OS keychain | Never stored | Never stored |
+
+Garmin's API refuses requests from web pages (it sends no CORS headers), so a page
+needs something on a server to reach it. The local app is that something on your
+own computer. The Worker is that something in your own Cloudflare account. This
+project never uses a relay run by anyone else, and neither should you.
 
 ## Where data lives
 
-| Thing | Local app | Hosted demo | How long |
-|---|---|---|---|
-| Garmin API key and 24 h token | Program memory | Not used | Until you quit or click "Forget everything" |
-| AI provider keys | Program memory | Tab memory | Until you quit / close or reload the tab, or click "Forget everything" |
-| Garmin data fetched for a question | Program memory (15-minute cache) | Sample data only | Same |
-| Conversation and outbound log | Tab and program memory | Tab memory | Same; you can export them |
-| Disk, cookies, localStorage, sessionStorage | Nothing, unless you opt in to the OS keychain | Nothing | |
+| Thing | Local app | Cloudflare Worker version | Demo | How long |
+|---|---|---|---|---|
+| Garmin API key and 24 h token | Program memory | Tab memory; passes through the Worker per request | Not used | Until you quit / close or reload the tab, or click "Forget everything" |
+| AI provider keys | Program memory | Tab memory; never sent to the Worker | Tab memory | Same |
+| Garmin data fetched for a question | Program memory (15-minute cache) | Tab memory; passes through the Worker once | Sample data | Same |
+| Conversation and outbound log | Tab and program memory | Tab memory | Tab memory | Same; you can export them |
+| Disk, cookies, localStorage, sessionStorage, Worker storage | Nothing, unless you opt in to the OS keychain | Nothing | Nothing | |
 
 There is no database, no cloud storage, no account, no analytics and no telemetry.
 GitHub serves the demo page's files and so sees that your IP address loaded them, as
@@ -32,8 +37,10 @@ any web host does. It never receives your keys or your questions.
 
 Only two kinds of request, both listed live in the "What left this computer" panel:
 
-1. **To Garmin** (`personal.connectapi.garmin.com`), local app only: your key, to get
-   a token; then read-only requests for your own data.
+1. **To Garmin** (`personal.connectapi.garmin.com`): your key, to get a token; then
+   read-only requests for your own data. From the local app these go direct. From
+   the Cloudflare version they go to your Worker, which forwards them. The demo
+   sends none.
 2. **To the AI provider you chose**: the system prompt, your questions, and the
    filtered data needed to answer them. Click "See exactly what was sent" on any
    entry to read the full request body.
@@ -91,6 +98,33 @@ check.
 | The token leaks through browser history or logs | It travels in the URL fragment, which is never sent to a server, and is removed from the address bar on load |
 | Page JavaScript is tampered with | Keys never reach the page; a stricter policy (`connect-src 'self'`) stops the page contacting anything but the local server |
 
+## The Cloudflare Worker relay
+
+What `cloudflare/worker.js` enforces, each covered by a test:
+
+| Risk | Control |
+|---|---|
+| Another website uses your relay from a visitor's browser | Requests must carry the browser-set `Sec-Fetch-Site: same-origin` and a custom header; the relay sends no CORS headers, so other sites can neither send the custom header nor read a reply |
+| The relay is used to reach some other server | The upstream host is fixed in code to Garmin's |
+| The relay is used to change your Garmin account | Only GET on a fixed list of read-only paths, plus the one token exchange |
+| Keys or data linger at Cloudflare | The Worker has no storage bindings, writes no logs (`observability` is off in `wrangler.jsonc`), and marks every reply `no-store` |
+| Cookies or other headers leak upstream | Only `Authorization` and `Accept` are forwarded |
+| The page is framed or loads foreign code | The Worker sends the Content-Security-Policy as a real header, including `frame-ancestors 'none'` |
+
+What it cannot protect against:
+
+- **Cloudflare itself.** Requests are decrypted inside Cloudflare's network to be
+  forwarded. You are trusting Cloudflare the way any site behind it does.
+- **Someone else using your address.** A person with a script (not a browser) who
+  knows your Worker's address could relay their own Garmin key through it. They
+  get nothing of yours, but it is your quota and your name on the relay. Turn on
+  Cloudflare Access for the Worker's address so only you can open it.
+- **Whoever can change the code.** If Cloudflare is connected to the GitHub repo,
+  anyone who can push to `main` can change what the Worker and the page do.
+  Protect both accounts with two-factor authentication.
+- **The tab.** Keys are in the page's memory, where a malicious browser extension
+  could read them. The local app keeps keys out of the page.
+
 ## Things to know about the hosted demo
 
 - **It handles no Garmin key and no real health data.** The only secret it ever
@@ -124,8 +158,8 @@ check.
 - Field-name filtering can miss an identifier with an unexpected name.
 - Neither Python nor JavaScript can reliably erase secrets from memory; "forgotten" means dereferenced
   and gone when the process exits.
-- The local app has not yet been tested against live Garmin or provider endpoints
-  (see the README).
+- Nothing has yet been tested against live Garmin or provider endpoints, and the
+  Worker has only been run in Cloudflare's runtime on a test machine (see the README).
 - No independent security review has been done.
 
 ## Reporting a problem

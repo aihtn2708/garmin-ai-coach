@@ -1,7 +1,9 @@
 __pycache__/
 *.pyc
 .env
+.dev.vars
 *.key
 garmin-coach-*.md
 garmin-coach-log-*.json
 node_modules/
+.wrangler/
