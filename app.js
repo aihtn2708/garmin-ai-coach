@@ -94,7 +94,7 @@
     $("step-garmin").classList.toggle("done", g.connected);
     if (g.connected) {
       $("garmin-state").textContent = g.demo
-        ? "Using built-in sample data. Nothing is requested from Garmin."
+        ? (backend ? "Built-in sample data is loaded. This page never contacts Garmin." : "Using built-in sample data. Nothing is requested from Garmin.")
         : `Connected. Access renews automatically until your key expires${g.token_expires_at ? "; current token valid until " + new Date(g.token_expires_at * 1000).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : ""}.`;
     }
 
@@ -179,7 +179,7 @@
   function updateComposer() {
     let need = "";
     if (!token && !backend) need = "This tab has no session token. Open the link printed in the terminal.";
-    else if (!state.garmin.connected) need = "Connect Garmin or load the sample data to start.";
+    else if (!state.garmin.connected) need = backend ? "Load the sample data to start." : "Connect Garmin or load the sample data to start.";
     else if (!(state.provider.name && state.provider.model)) need = "Choose an AI model to start.";
     $("need").textContent = need;
     const off = Boolean(need) || busy;
@@ -241,6 +241,7 @@
     wipeArmed = 0;
     e.target.textContent = "Forget everything";
     render(await api("/api/wipe", {}));
+    if (backend) render(await api("/api/garmin/connect", { demo: true }));  // the demo always has its sample data
     resetThread();
     lastId = 0; entries = []; renderLog();
     $("provider").replaceChildren(); render(state);
@@ -629,14 +630,21 @@
   (async () => {
     const mode = detectMode();
     if (mode === "browser") {
+      // Hosted page: a demo on sample data. Garmin refuses requests from web pages,
+      // so real data needs the local app; this page never asks for a Garmin key.
       backend = window.CoachCore.createBackend();
-      $("brand-where").textContent = "runs inside this browser tab, with no server behind it";
+      document.body.classList.add("mode-browser");
+      $("brand-where").textContent = "demo on sample data, running inside this browser tab";
+      $("garmin-title").textContent = "Sample Garmin data";
+      $("garmin-demo").textContent = "Load sample data";
       $("welcome-text").textContent =
-        "This page has no server. Your keys and your Garmin data go straight from this tab to " +
-        "Garmin and to the AI model you choose, and nowhere else. Nothing is saved in the browser: " +
-        "close or reload the tab and it is all forgotten. The log on the right shows every request.";
+        "This page is a demo on built-in sample data. Garmin does not let web pages read your account, " +
+        "so to ask about your own training, run the app on your computer (three commands, on the left). " +
+        "The AI part here is real: add a model key and it analyses the sample data. The key goes straight " +
+        "from this tab to the provider you choose and is forgotten when you close or reload the tab.";
       $("remember-off").textContent = "Keys are held in this tab's memory and forgotten when you close or reload it.";
       $("quit").hidden = true;
+      await api("/api/garmin/connect", { demo: true });
     }
     try {
       if (mode === "local-no-token") throw new Error("no token");

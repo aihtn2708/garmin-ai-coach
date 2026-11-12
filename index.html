@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <!-- The browser enforces this list: the page can only load its own files and can only
-     connect to Garmin, the five model providers below, and Ollama on this computer. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://personal.connectapi.garmin.com https://generativelanguage.googleapis.com https://openrouter.ai https://api.anthropic.com https://api.deepseek.com http://127.0.0.1:11434 http://localhost:11434; base-uri 'none'; form-action 'none'">
+     connect to the model providers below and to Ollama on this computer. Garmin is not
+     listed: Garmin refuses requests from web pages, so this page never sends it anything. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://generativelanguage.googleapis.com https://openrouter.ai https://api.anthropic.com https://api.deepseek.com http://127.0.0.1:11434 http://localhost:11434; base-uri 'none'; form-action 'none'">
 <title>Garmin AI Coach</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
@@ -29,21 +30,32 @@
   <!-- ───────────── Setup ───────────── -->
   <aside class="setup" id="panel-setup" aria-label="Setup">
     <section class="step" id="step-garmin">
-      <h2><span class="step-n">1</span>Connect Garmin</h2>
+      <h2><span class="step-n">1</span><span id="garmin-title">Connect Garmin</span></h2>
       <div id="garmin-off">
-        <label for="garmin-key">Garmin Personal API key</label>
-        <input id="garmin-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key">
-        <p class="hint">Create one in Garmin Connect under Settings, Personal API key.
-          <a id="garmin-key-link" href="https://connect.garmin.com/app/settings/personalApiToken" target="_blank" rel="noopener noreferrer">Open the key page</a></p>
-        <div class="row">
-          <button type="button" class="primary" id="garmin-connect">Connect Garmin</button>
-          <button type="button" id="garmin-saved" hidden>Use saved key</button>
+        <div class="local-only">
+          <label for="garmin-key">Garmin Personal API key</label>
+          <input id="garmin-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key">
+          <p class="hint">Create one in Garmin Connect under Settings, Personal API key.
+            <a id="garmin-key-link" href="https://connect.garmin.com/app/settings/personalApiToken" target="_blank" rel="noopener noreferrer">Open the key page</a></p>
+          <div class="row">
+            <button type="button" class="primary" id="garmin-connect">Connect Garmin</button>
+            <button type="button" id="garmin-saved" hidden>Use saved key</button>
+          </div>
         </div>
         <button type="button" class="link" id="garmin-demo">Try it with sample data instead</button>
       </div>
       <div id="garmin-on" hidden>
         <p class="state-line"><span class="dot dot-local"></span><span id="garmin-state"></span></p>
-        <button type="button" id="garmin-disconnect">Disconnect</button>
+        <button type="button" class="local-only" id="garmin-disconnect">Disconnect</button>
+      </div>
+      <div class="own-data browser-only">
+        <p><b>To ask about your own data, run the app on your computer.</b>
+          Garmin does not let web pages read from its API, so this page cannot connect to your account.</p>
+        <pre>git clone https://github.com/aihtn2708/garmin-ai-coach
+cd garmin-ai-coach
+python run.py</pre>
+        <p class="hint">Needs Python 3.9 or newer, nothing else. Same interface, your real data, and your keys stay on your computer.
+          <a href="https://github.com/aihtn2708/garmin-ai-coach#readme" target="_blank" rel="noopener noreferrer">Full instructions</a></p>
       </div>
       <p class="error" id="garmin-error" role="alert" hidden></p>
     </section>
