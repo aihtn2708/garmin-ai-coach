@@ -174,6 +174,19 @@ pip install keyring
 Restart the app and tick "Remember keys in this computer's keychain". The browser
 version never stores keys.
 
+## Updating the hosted page
+
+GitHub Pages serves the `gh-pages` branch, which is a copy of the `docs/` folder on
+`main`. After changing anything in `docs/`, commit to `main`, then republish:
+
+```
+git push origin main
+git push origin `git subtree split --prefix docs main`:gh-pages --force
+```
+
+To drop the second branch, set Settings → Pages to branch `main`, folder `/docs`,
+and delete `gh-pages`.
+
 ## Ideas for later
 
 - Parse FIT files locally for pace, power and heart-rate-zone analysis
