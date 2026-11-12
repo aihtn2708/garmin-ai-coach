@@ -3,39 +3,37 @@
 The design goal: your Garmin data and your keys stay under your control, and you
 can see everything that leaves your computer.
 
-There are two versions with the same interface and the same filtering. They differ
-in where the keys sit.
+There are two versions with the same interface and the same filtering.
 
-| | Browser version (GitHub Pages) | Local version (`python run.py`) |
+| | Local app (`python run.py`) | Hosted demo (GitHub Pages) |
 |---|---|---|
-| Where the logic runs | In the page (`docs/core.js`) | In a Python program on `127.0.0.1` |
-| Where keys are held | The tab's JavaScript memory | The Python program's memory; the page never holds them |
-| Who you trust for the code | Whoever can push to the GitHub repo, on every page load | The copy you downloaded |
-| Garmin from a web page (CORS) | Must be allowed by Garmin; unconfirmed | Not affected |
-| Keys between sessions | Never stored | Optional OS keychain |
-
-If you want the stronger of the two, use the local version.
+| Garmin data | Your own, through your Personal API key | Built-in sample data only |
+| Why | | Garmin's API refuses requests from web pages (no CORS headers). The only way round is a relay server, which would see your key. This project does not use one |
+| Where the logic runs | A Python program on `127.0.0.1` | In the page (`docs/core.js`) |
+| Garmin key | In the Python program's memory; the page never holds it | Never asked for; the page's policy forbids contacting Garmin |
+| AI provider key | In the Python program's memory | In the tab's memory |
+| Keys between sessions | Optional OS keychain | Never stored |
 
 ## Where data lives
 
-| Thing | Browser version | Local version | How long |
+| Thing | Local app | Hosted demo | How long |
 |---|---|---|---|
-| Garmin API key and 24 h token | Tab memory | Program memory | Until you close or reload the tab / quit, or click "Forget everything" |
-| AI provider keys | Tab memory | Program memory | Same |
-| Garmin data fetched for a question | Tab memory (15-minute cache) | Program memory | Same |
-| Conversation and outbound log | Tab memory | Tab and program memory | Same; you can export them |
-| Disk, cookies, localStorage, sessionStorage | Nothing | Nothing, unless you opt in to the OS keychain | |
+| Garmin API key and 24 h token | Program memory | Not used | Until you quit or click "Forget everything" |
+| AI provider keys | Program memory | Tab memory | Until you quit / close or reload the tab, or click "Forget everything" |
+| Garmin data fetched for a question | Program memory (15-minute cache) | Sample data only | Same |
+| Conversation and outbound log | Tab and program memory | Tab memory | Same; you can export them |
+| Disk, cookies, localStorage, sessionStorage | Nothing, unless you opt in to the OS keychain | Nothing | |
 
 There is no database, no cloud storage, no account, no analytics and no telemetry.
-GitHub serves the page's files and so sees that your IP address loaded them, as any
-web host does. It never receives your keys, your Garmin data or your questions.
+GitHub serves the demo page's files and so sees that your IP address loaded them, as
+any web host does. It never receives your keys or your questions.
 
 ## What leaves your computer
 
 Only two kinds of request, both listed live in the "What left this computer" panel:
 
-1. **To Garmin** (`personal.connectapi.garmin.com`): your key, to get a token; then
-   read-only requests for your own data.
+1. **To Garmin** (`personal.connectapi.garmin.com`), local app only: your key, to get
+   a token; then read-only requests for your own data.
 2. **To the AI provider you chose**: the system prompt, your questions, and the
    filtered data needed to answer them. Click "See exactly what was sent" on any
    entry to read the full request body.
@@ -75,7 +73,7 @@ check.
 | Risk | Control |
 |---|---|
 | A compromised dependency steals keys | There are no dependencies: hand-written JavaScript and the Python standard library. No CDN, no web fonts |
-| The page loads or contacts something unexpected | Content-Security-Policy: scripts and styles from the page's own origin only; connections only to Garmin, the listed AI providers and Ollama on this computer. The browser enforces it |
+| The page loads or contacts something unexpected | Content-Security-Policy: scripts and styles from the page's own origin only. The local page may connect only to the local server; the hosted demo only to the listed AI providers and Ollama on this computer. The browser enforces it |
 | A model reply smuggles data out through a link or image | Replies are inserted as text; links are not clickable and images are never loaded |
 | Text in your data (an activity name, say) tries to instruct the model | The model can only call six read-only tools with validated arguments; it cannot fetch URLs, send messages or change anything. The system prompt tells it to treat tool results as data |
 | The model asks for more than it should | Category switches enforced in code; date, range and size limits; 24 Garmin requests and 8 model steps per question |
@@ -84,7 +82,7 @@ check.
 | Keys end up in logs | Keys travel in request headers, which are never recorded |
 | Keys linger | Memory only; "Forget everything" clears keys, data, conversation and log |
 
-## Extra controls in the local version
+## Extra controls in the local app
 
 | Risk | Control |
 |---|---|
@@ -93,16 +91,16 @@ check.
 | The token leaks through browser history or logs | It travels in the URL fragment, which is never sent to a server, and is removed from the address bar on load |
 | Page JavaScript is tampered with | Keys never reach the page; a stricter policy (`connect-src 'self'`) stops the page contacting anything but the local server |
 
-## Extra risks in the browser version
+## Things to know about the hosted demo
 
+- **It handles no Garmin key and no real health data.** The only secret it ever
+  holds is an AI provider key, if you add one.
 - **The repo is the trust anchor.** The page runs whatever is in the repo's `docs/`
-  folder at the moment you load it. Anyone who can push to the repo can change
-  that code. Protect the GitHub account with two-factor authentication, and do
-  not add collaborators you would not hand your keys to. To pin a version you
-  have read, use the local version from a specific commit.
-- **Keys are in the page.** Anything that can run script in the tab (a malicious
-  browser extension, for example) could read them. The local version keeps keys
-  out of the page.
+  folder at the moment you load it. Protect the GitHub account with two-factor
+  authentication.
+- **The AI key is in the page.** Anything that can run script in the tab (a
+  malicious browser extension, for example) could read it. Use a key with a
+  spending limit, or use the local app.
 - **Anthropic's browser header.** Calling Claude from a page requires the header
   `anthropic-dangerous-direct-browser-access`. The name warns developers not to
   ship their own key to visitors. Here the key is the visitor's own and stays in
@@ -114,7 +112,7 @@ check.
   Connect when you stop using the app. Deleting the key also cancels its tokens.
 - Use a separate AI provider key for this app and set a spending limit on it
   where the provider offers one.
-- Do not expose the local version's port to a network or use either version on a
+- Do not expose the local app's port to a network or use either version on a
   shared machine or shared browser profile.
 - Keep the key to yourself. Garmin's Personal API terms limit it to you and to
   tools you run for your own use.
@@ -126,8 +124,8 @@ check.
 - Field-name filtering can miss an identifier with an unexpected name.
 - Neither Python nor JavaScript can reliably erase secrets from memory; "forgotten" means dereferenced
   and gone when the process exits.
-- Not tested against live Garmin or provider endpoints, and Garmin's support for
-  browser requests is unconfirmed (see the README).
+- The local app has not yet been tested against live Garmin or provider endpoints
+  (see the README).
 - No independent security review has been done.
 
 ## Reporting a problem

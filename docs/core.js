@@ -2,9 +2,10 @@
 /* Garmin AI Coach, browser engine.
 
    Everything the local Python app does on its server, done inside the page
-   instead: the Garmin client, the privacy filter, the six tools, the model
-   adapters, the question-answering loop and the outbound log. It is a
-   line-for-line port of the modules in coach/ and is tested against them.
+   instead: the privacy filter, the six tools, the model adapters, the
+   question-answering loop and the outbound log. It is a port of the modules
+   in coach/ and is tested against them. The hosted page runs it on sample
+   data, because Garmin does not accept requests from web pages.
 
    Rules this file keeps:
      - Egress.request is the only place that calls fetch().
@@ -138,6 +139,10 @@
   }
 
   // ── Garmin Connect Personal API (read-only) ────────────────────────────────
+  // Not reachable from the hosted page: Garmin sends no CORS headers, the page's
+  // Content-Security-Policy does not list Garmin, and createBackend() refuses a
+  // key unless a test supplies a loopback address. The client stays here, tested
+  // against a stand-in, so the page needs no rewrite if Garmin ever allows browsers.
   const GARMIN_BASE = "https://personal.connectapi.garmin.com";
   const TOKEN_PATH = "/personalapitoken-service/personal-api/personal-api-key/token";
   const KEY_PAGE = "https://connect.garmin.com/app/settings/personalApiToken";
@@ -1140,7 +1145,11 @@ Formatting: short paragraphs, plain Markdown, tables only for small comparisons.
       "/api/garmin/connect": async (b) => {
         let client;
         if (b.demo) client = new DemoGarmin();
-        else { client = new GarminClient(b.api_key, egress, opts.garminBaseUrl); await client.connect(); }
+        else if (!opts.garminBaseUrl) {
+          // Garmin's API refuses requests from web pages (no CORS headers), confirmed
+          // November 2026. Refuse here, before any key is put on the network.
+          fail("Garmin does not accept requests from web pages, so this page works on sample data only. Run the app on your computer to use your own data.");
+        } else { client = new GarminClient(b.api_key, egress, opts.garminBaseUrl); await client.connect(); }
         if (st.garmin) st.garmin.forget();
         st.garmin = client; aliases.clear();
         return snapshot();

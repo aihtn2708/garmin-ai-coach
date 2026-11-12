@@ -9,21 +9,7 @@ filters it, and sends only what a question needs to an AI model you choose.
 
 It is a personal tool for one person. It is not affiliated with Garmin.
 
-## Two ways to run it
-
-### 1. In your browser, nothing to install
-
-Open **<https://aihtn2708.github.io/garmin-ai-coach/>**.
-
-The page is a set of static files. There is no server behind it: your browser talks
-directly to Garmin and to the AI provider you choose. Keys live in the tab's memory
-and are gone when you close or reload it.
-
-One thing is not yet confirmed: whether Garmin's API accepts requests made by a web
-page (a browser rule called CORS). If it does not, "Connect Garmin" will say so, and
-the local app below is the way to go. "Try it with sample data" works either way.
-
-### 2. On your computer
+## Run it on your computer (your real data)
 
 You need Python 3.9 or newer. There is nothing else to install.
 
@@ -34,12 +20,27 @@ python run.py
 ```
 
 A browser tab opens at `http://127.0.0.1:8765`. Keys stay in the Python program's
-memory rather than in the page, and Garmin's browser rules do not apply. Press
-Ctrl+C in the terminal, or click Quit, to stop.
+memory and never reach the page. Press Ctrl+C in the terminal, or click Quit, to
+stop.
 
-### Then, in either one
+## Try the demo in your browser (sample data)
 
-1. **Connect Garmin.** Create a key at
+**<https://aihtn2708.github.io/garmin-ai-coach/>**
+
+The hosted page is the same interface running on built-in sample data. It cannot
+load your own Garmin data: Garmin's API does not accept requests from web pages
+(it sends no CORS headers; confirmed with a real key on 12 November 2026), and
+this project will not route your key through someone else's server to get around
+that. The page never asks for a Garmin key and its security policy does not allow
+it to contact Garmin at all.
+
+The AI part of the demo is real. Add a model key and the model analyses the sample
+data. That key goes straight from the tab to the provider and is forgotten when
+you close or reload the tab.
+
+## Using it
+
+1. **Connect Garmin** (local app only). Create a key at
    <https://connect.garmin.com/app/settings/personalApiToken> (pick the shortest
    expiry you are comfortable with) and paste it in. Or click "Try it with sample
    data" to look around first.
@@ -66,9 +67,10 @@ output tokens (the app shows the real numbers under each answer). On Claude Haik
 If "no data used for training" matters more to you than "free", the options are a
 local model, a paid API, or Gemini with billing enabled.
 
-In the browser version, a provider must also accept requests from web pages. Gemini,
+In the hosted demo, a provider must also accept requests from web pages. Gemini,
 OpenRouter and Anthropic do. Reports about DeepSeek conflict. Ollama works if you
-start it with `OLLAMA_ORIGINS=https://aihtn2708.github.io`.
+start it with `OLLAMA_ORIGINS=https://aihtn2708.github.io`. The local app has no
+such limits.
 
 ## How it works
 
@@ -89,9 +91,10 @@ start it with `OLLAMA_ORIGINS=https://aihtn2708.github.io`.
      log: every outbound request, shown in the page
 ```
 
-In the browser version all of this runs inside the page (`docs/core.js`). In the
-local version the same steps run in a small Python server on `127.0.0.1`
-(`coach/`), and the page only draws the interface.
+In the local app these steps run in a small Python server on `127.0.0.1`
+(`coach/`), and the page only draws the interface. In the hosted demo the same
+steps run inside the page (`docs/core.js`), with sample data in place of the
+Garmin client.
 
 The model never receives a URL, a key or raw Garmin output. It can ask for one of
 six things (a metric over a date range, one day's detail, the activity list, one
@@ -101,8 +104,8 @@ fetches from Garmin, filters the result and passes it on.
 | File | Job |
 |---|---|
 | `docs/index.html`, `app.js`, `style.css` | The interface, shared by both versions. No libraries |
-| `docs/core.js` | Browser version: Garmin client, privacy filter, tools, providers, agent, log |
-| `run.py` | Starts the local version |
+| `docs/core.js` | Hosted demo: sample data, privacy filter, tools, providers, agent, log |
+| `run.py` | Starts the local app |
 | `coach/server.py` | Local web server and its protections |
 | `coach/net.py` | The only Python code that opens network connections; host allowlist |
 | `coach/garmin.py` | Read-only Garmin client, token handling |
@@ -120,8 +123,8 @@ Security and governance details are in [SECURITY.md](SECURITY.md).
 ## What has and has not been tested
 
 ```
-python -m unittest discover -s tests -t . -v     # local version, 19 tests
-node --test tests/test_core.js                   # browser version, 9 tests
+python -m unittest discover -s tests -t . -v     # local app, 19 tests
+node --test tests/test_core.js                   # hosted demo, 10 tests
 ```
 
 Tested:
@@ -133,13 +136,14 @@ Tested:
 - both model wire formats against local stand-in servers, including Gemini's
   thought-signature round trip;
 - the local server's guards and a full question-to-answer session;
-- both versions in Chrome at desktop and phone widths, including that the page
-  stores nothing and that the browser blocks connections to unlisted hosts.
+- both versions in Chrome at desktop and phone widths, including that the hosted
+  page stores nothing, never sends a Garmin key, and that the browser blocks
+  connections to unlisted hosts.
 
-Not tested: a real Garmin key or a real provider key. None were available while
-building this, so expect rough edges on first contact. Likely places:
+Not tested: the local app with a real Garmin key or a real provider key. None were
+available while building this, so expect rough edges on first contact. Likely
+places:
 
-- **Garmin from a web page.** Whether Garmin allows browser requests is unknown.
 - **Garmin response shapes.** Garmin's Swagger page could not be read while
   building, so the filter does not assume field names; it works on any JSON. If
   an answer looks thin, open "See exactly what was sent" in the log to see what
@@ -157,12 +161,10 @@ building this, so expect rough edges on first contact. Likely places:
   spans the model is told to ask for weekly or monthly averages.
 - Activity FIT files (second-by-second data) are not downloaded or parsed.
 - Garmin's terms say the key is for you alone, with tools you run for your own
-  use. Never share your key. The hosted page is public, but it has no server and
-  no accounts: each visitor's browser uses only that visitor's own key. If you
-  fork this, keep it that way.
+  use. Never share your key, and do not put it into any hosted service.
 - This is not medical advice.
 
-## Optional: remember keys between sessions (local version only)
+## Optional: remember keys between sessions
 
 By default you paste keys each time you start the app. To store them in your
 operating system's keychain instead:
@@ -171,10 +173,10 @@ operating system's keychain instead:
 pip install keyring
 ```
 
-Restart the app and tick "Remember keys in this computer's keychain". The browser
-version never stores keys.
+Restart the app and tick "Remember keys in this computer's keychain". The hosted
+demo never stores keys.
 
-## Updating the hosted page
+## Updating the hosted demo
 
 GitHub Pages serves the `gh-pages` branch, which is a copy of the `docs/` folder on
 `main`. After changing anything in `docs/`, commit to `main`, then republish:

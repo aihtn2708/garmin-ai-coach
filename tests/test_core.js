@@ -131,6 +131,18 @@ test("Garmin client: bad key, token refresh, cache, path allowlist, test overrid
   assert.equal(new core.GarminClient("k", new core.Egress(new core.Ledger()), "https://evil.example").baseUrl, "https://personal.connectapi.garmin.com");
 });
 
+test("the hosted page never sends a Garmin key anywhere", async () => {
+  let calls = 0;
+  const backend = core.createBackend({ fetch: async () => { calls++; return new Response("x"); } });
+  await assert.rejects(backend.api("/api/garmin/connect", { api_key: "my-real-key" }), /sample data only/);
+  assert.equal(calls, 0);
+  assert.deepEqual((await backend.api("/api/ledger?since=0")).entries, []);
+  const html = require("node:fs").readFileSync(path.join(ROOT, "docs", "index.html"), "utf8");
+  const csp = /http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(html)[1];
+  assert.ok(!csp.includes("garmin"), "Garmin must not be in the page's connect list");
+  assert.ok(csp.includes("default-src 'none'") && csp.includes("script-src 'self'"));
+});
+
 test("a provider the browser cannot reach gives a clear message, not a crash", async () => {
   const eg = new core.Egress(new core.Ledger(), async () => { throw new TypeError("Failed to fetch"); });
   await assert.rejects(core.listModels("deepseek", "k", eg), /could not reach DeepSeek/);

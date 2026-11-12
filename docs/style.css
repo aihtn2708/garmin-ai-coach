@@ -124,6 +124,13 @@ button.link:hover { color: var(--ink); }
 .check input { margin-top: 0.3rem; accent-color: var(--local); }
 .check small { display: block; color: var(--ink-3); font-size: 0.8125rem; }
 
+/* ── things shown in only one of the two versions ────────── */
+.browser-only { display: none; }
+.mode-browser .browser-only { display: block; }
+.mode-browser .local-only { display: none; }
+.own-data { margin-top: 0.9rem; padding: 0.7rem 0.8rem; border-radius: 6px; font-size: 0.875rem; background: var(--out-wash); border-left: 3px solid var(--out); }
+.own-data pre { margin: 0.6rem 0 0; padding: 0.6rem 0.7rem; border-radius: 4px; background: var(--surface); font: 0.75rem/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; }
+
 /* ── setup steps ─────────────────────────────────────────── */
 .step { padding-bottom: 1.4rem; margin-bottom: 1.4rem; border-bottom: 1px solid var(--line); }
 .step h2 { font-size: 1.0625rem; display: flex; align-items: baseline; gap: 0.6rem; }
