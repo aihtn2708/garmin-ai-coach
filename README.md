@@ -1,13 +1,14 @@
 # Garmin AI Coach
 
-Ask questions about your own Garmin data in plain language. It runs in your browser
-or on your computer, reads your data through the
+Ask questions about your own Garmin data in plain language. The app runs on your
+computer, reads your data through the
 [Garmin Connect Personal API](https://developer.garmin.com/gc-developer-program/personal/),
 filters it, and sends only what a question needs to an AI model you choose.
 
 ![The app answering a sleep question with a chart](docs/screenshot.png)
 
-It is a personal tool for one person. It is not affiliated with Garmin.
+It is a personal tool for one person. It is not affiliated with Garmin. A demo on
+sample data runs in the browser, with no install.
 
 ## Run it on your computer (your real data)
 
@@ -29,7 +30,7 @@ stop.
 
 The hosted page is the same interface running on built-in sample data. It cannot
 load your own Garmin data: Garmin's API does not accept requests from web pages
-(it sends no CORS headers; confirmed with a real key on 12 November 2026), and
+(it sends no CORS headers; confirmed on 12 November 2026), and
 this project will not route your key through someone else's server to get around
 that. The page never asks for a Garmin key and its security policy does not allow
 it to contact Garmin at all.
