@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<!-- The browser enforces this list: the page can only load its own files and can only
+     connect to Garmin, the five model providers below, and Ollama on this computer. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://personal.connectapi.garmin.com https://generativelanguage.googleapis.com https://openrouter.ai https://api.anthropic.com https://api.deepseek.com http://127.0.0.1:11434 http://localhost:11434; base-uri 'none'; form-action 'none'">
+<title>Garmin AI Coach</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="brand-name">Garmin AI Coach</span>
+    <span class="brand-where" id="brand-where">running on this computer only</span>
+  </div>
+  <nav class="tabs" aria-label="Sections">
+    <button type="button" data-tab="setup">Setup</button>
+    <button type="button" data-tab="chat" aria-current="true">Chat</button>
+    <button type="button" data-tab="log">Log</button>
+  </nav>
+  <div class="top-status" id="top-status" aria-live="polite"></div>
+</header>
+
+<main class="layout" data-view="chat">
+  <!-- ───────────── Setup ───────────── -->
+  <aside class="setup" id="panel-setup" aria-label="Setup">
+    <section class="step" id="step-garmin">
+      <h2><span class="step-n">1</span>Connect Garmin</h2>
+      <div id="garmin-off">
+        <label for="garmin-key">Garmin Personal API key</label>
+        <input id="garmin-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key">
+        <p class="hint">Create one in Garmin Connect under Settings, Personal API key.
+          <a id="garmin-key-link" href="https://connect.garmin.com/app/settings/personalApiToken" target="_blank" rel="noopener noreferrer">Open the key page</a></p>
+        <div class="row">
+          <button type="button" class="primary" id="garmin-connect">Connect Garmin</button>
+          <button type="button" id="garmin-saved" hidden>Use saved key</button>
+        </div>
+        <button type="button" class="link" id="garmin-demo">Try it with sample data instead</button>
+      </div>
+      <div id="garmin-on" hidden>
+        <p class="state-line"><span class="dot dot-local"></span><span id="garmin-state"></span></p>
+        <button type="button" id="garmin-disconnect">Disconnect</button>
+      </div>
+      <p class="error" id="garmin-error" role="alert" hidden></p>
+    </section>
+
+    <section class="step" id="step-model">
+      <h2><span class="step-n">2</span>Choose an AI model</h2>
+      <label for="provider">Provider</label>
+      <select id="provider"></select>
+      <p class="hint" id="provider-cost"></p>
+      <div class="notice" id="provider-notice">
+        <p class="notice-title">What this provider does with your prompts</p>
+        <p id="provider-data"></p>
+        <a id="provider-terms" target="_blank" rel="noopener noreferrer">Read the terms</a>
+      </div>
+      <div id="provider-key-wrap">
+        <label for="provider-key">API key</label>
+        <input id="provider-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key">
+        <p class="hint"><a id="provider-key-link" target="_blank" rel="noopener noreferrer">Get a key</a></p>
+      </div>
+      <label class="check" id="or-block-wrap" hidden>
+        <input type="checkbox" id="or-block" checked>
+        <span>Refuse hosts that may train on my prompts</span>
+      </label>
+      <button type="button" class="primary" id="load-models">Load models</button>
+      <div id="model-wrap" hidden>
+        <label for="model">Model</label>
+        <select id="model"></select>
+        <label class="check" id="paid-wrap" hidden>
+          <input type="checkbox" id="show-paid">
+          <span>Show paid models too</span>
+        </label>
+      </div>
+      <p class="error" id="model-error" role="alert" hidden></p>
+    </section>
+
+    <section class="step" id="step-scope">
+      <h2><span class="step-n">3</span>Decide what the AI may see</h2>
+      <div id="categories" class="checks"></div>
+      <fieldset class="levels">
+        <legend>Filtering before anything is sent</legend>
+        <label class="check"><input type="radio" name="level" value="balanced">
+          <span><b>Balanced.</b> Removes account names, IDs, GPS and device details.</span></label>
+        <label class="check"><input type="radio" name="level" value="strict">
+          <span><b>Strict.</b> Also removes activity names, places and notes.</span></label>
+      </fieldset>
+    </section>
+
+    <section class="step step-end">
+      <label class="check" id="remember-wrap" hidden>
+        <input type="checkbox" id="remember">
+        <span>Remember keys in this computer's keychain</span>
+      </label>
+      <p class="hint" id="remember-off">Keys are held in memory and forgotten when you quit.</p>
+      <div class="row">
+        <button type="button" id="wipe">Forget everything</button>
+        <button type="button" id="quit">Quit</button>
+      </div>
+      <p class="hint"><a href="https://github.com/aihtn2708/garmin-ai-coach/blob/main/SECURITY.md" target="_blank" rel="noopener noreferrer">How your keys and data are protected</a>.
+        A personal project, not affiliated with Garmin. Not medical advice.</p>
+    </section>
+  </aside>
+
+  <!-- ───────────── Chat ───────────── -->
+  <section class="chat" id="panel-chat" aria-label="Chat">
+    <div class="thread" id="thread">
+      <div class="welcome" id="welcome">
+        <h1>Ask your training data a question.</h1>
+        <p id="welcome-text">Your Garmin data is fetched and filtered here. Only the figures needed to answer
+          are sent to the model you choose, and the log on the right shows every request.</p>
+        <div class="suggest" id="suggest"></div>
+      </div>
+    </div>
+    <form class="composer" id="composer">
+      <p class="need" id="need" role="status"></p>
+      <div class="composer-row">
+        <textarea id="question" rows="2" maxlength="4000" placeholder="Ask about sleep, recovery, training load…" aria-label="Your question"></textarea>
+        <button type="submit" class="primary" id="ask">Ask</button>
+      </div>
+      <div class="composer-tools">
+        <button type="button" class="link" id="new-chat">Start a new conversation</button>
+        <button type="button" class="link" id="save-chat">Save conversation</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- ───────────── Log ───────────── -->
+  <aside class="log" id="panel-log" aria-label="Outbound request log">
+    <h2>What left this computer</h2>
+    <dl class="totals" id="totals"></dl>
+    <ol class="entries" id="entries"></ol>
+    <p class="hint" id="log-empty">Nothing yet. Every request to Garmin or to an AI provider will be listed here.</p>
+    <button type="button" class="link" id="save-log">Save this log</button>
+  </aside>
+</main>
+
+<dialog id="detail">
+  <div class="dialog-inner">
+    <h2 id="detail-title">Exactly what was sent</h2>
+    <p class="hint" id="detail-sub"></p>
+    <pre id="detail-body"></pre>
+    <button type="button" class="primary" id="detail-close">Close</button>
+  </div>
+</dialog>
+
+<script src="core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
