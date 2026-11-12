@@ -9,8 +9,9 @@
 
    Rules this file keeps:
      - Egress.request is the only place that calls fetch().
-     - Keys live in closures and object fields, never in localStorage,
-       sessionStorage, cookies or the URL.
+     - Keys live in memory. They are written to browser storage only if the
+       user ticks "Remember keys on this device", and then only encrypted
+       (see the vault section). Never in cookies or the URL.
      - No third-party code. */
 (function (root) {
   const DAY = 86400000;
@@ -1130,6 +1131,98 @@ Formatting: short paragraphs, plain Markdown, tables only for small comparisons.
     return final;
   }
 
+  // ── vault: optional, encrypted storage of keys on this device ──────────────
+  // Off unless the user ticks "Remember keys on this device". Keys are encrypted
+  // with AES-256-GCM (Web Crypto) before they are written to browser storage.
+  //   - With a passphrase: the AES key is derived from it (PBKDF2-SHA256, 600,000
+  //     rounds) and exists only in memory. Without the passphrase the saved keys
+  //     cannot be read, by this page or by anyone with the browser's files.
+  //   - Without a passphrase: the AES key is a non-exportable key object kept in
+  //     this browser's IndexedDB. That stops the saved keys being read as plain
+  //     text from storage or a backup, but anyone who can open this page in this
+  //     browser profile can use them.
+  const VAULT_ITEM = "garmin-ai-coach.vault.v1";
+  const PBKDF2_ROUNDS = 600000;
+  const b64 = (buf) => { let out = ""; for (const b of new Uint8Array(buf)) out += String.fromCharCode(b); return btoa(out); };
+  const unb64 = (str) => Uint8Array.from(atob(str), (c) => c.charCodeAt(0));
+
+  /** Browser storage for the vault. Returns null where storage is unavailable. */
+  function browserVaultStore() {
+    try {
+      if (typeof localStorage === "undefined" || typeof indexedDB === "undefined" || !crypto.subtle) return null;
+      localStorage.getItem(VAULT_ITEM);
+    } catch (e) { return null; }
+    const db = () => new Promise((resolve, reject) => {
+      const req = indexedDB.open("garmin-ai-coach", 1);
+      req.onupgradeneeded = () => req.result.createObjectStore("keys");
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    const tx = async (mode, fn) => {
+      const d = await db();
+      try {
+        return await new Promise((resolve, reject) => {
+          const t = d.transaction("keys", mode);
+          const r = fn(t.objectStore("keys"));
+          t.oncomplete = () => resolve(r ? r.result : undefined);
+          t.onerror = t.onabort = () => reject(t.error);
+        });
+      } finally { d.close(); }
+    };
+    return {
+      read: async () => localStorage.getItem(VAULT_ITEM),
+      write: async (text) => localStorage.setItem(VAULT_ITEM, text),
+      clear: async () => { localStorage.removeItem(VAULT_ITEM); await tx("readwrite", (s) => s.delete("device")).catch(() => {}); },
+      getDeviceKey: () => tx("readonly", (s) => s.get("device")).catch(() => null),
+      setDeviceKey: (key) => tx("readwrite", (s) => s.put(key, "device")),
+    };
+  }
+
+  class Vault {
+    constructor(store) { this.store = store; this.key = null; this.head = null; }
+    async status() {
+      const raw = await this.store.read();
+      if (!raw) return { exists: false, protected: false };
+      try { return { exists: true, protected: JSON.parse(raw).mode === "pass" }; } catch (e) { return { exists: false, protected: false }; }
+    }
+    async passKey(passphrase, salt) {
+      const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(passphrase), "PBKDF2", false, ["deriveKey"]);
+      return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: PBKDF2_ROUNDS, hash: "SHA-256" }, base,
+        { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+    }
+    /** Choose how the vault is locked. An empty passphrase means "this device only". */
+    async setLock(passphrase) {
+      if (passphrase) {
+        const salt = crypto.getRandomValues(new Uint8Array(16));
+        this.key = await this.passKey(passphrase, salt);
+        this.head = { v: 1, mode: "pass", salt: b64(salt) };
+      } else {
+        this.key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+        await this.store.setDeviceKey(this.key);
+        this.head = { v: 1, mode: "device" };
+      }
+    }
+    async save(payload) {
+      if (!this.key) throw new Error("The vault is locked.");
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, this.key, new TextEncoder().encode(JSON.stringify(payload)));
+      await this.store.write(JSON.stringify({ ...this.head, iv: b64(iv), ct: b64(ct) }));
+    }
+    /** Returns the saved payload, or throws if the passphrase is wrong or the data was altered. */
+    async open(passphrase) {
+      const blob = JSON.parse(await this.store.read());
+      const key = blob.mode === "pass" ? await this.passKey(String(passphrase || ""), unb64(blob.salt)) : await this.store.getDeviceKey();
+      if (!key) throw new Error("The saved keys cannot be opened in this browser any more. Forget them and add your keys again.");
+      let plain;
+      try { plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(blob.iv) }, key, unb64(blob.ct)); }
+      catch (e) { throw new Error(blob.mode === "pass" ? "Wrong passphrase." : "The saved keys could not be read. Forget them and add your keys again."); }
+      this.key = key;
+      this.head = blob.mode === "pass" ? { v: 1, mode: "pass", salt: blob.salt } : { v: 1, mode: "device" };
+      return JSON.parse(new TextDecoder().decode(plain));
+    }
+    async forget() { this.key = null; this.head = null; await this.store.clear(); }
+  }
+
   // ── backend: the same routes the local server offers, answered in the page ─
   function createBackend(opts = {}) {
     const ledger = new Ledger();
@@ -1139,20 +1232,80 @@ Formatting: short paragraphs, plain Markdown, tables only for small comparisons.
       garmin: null, keys: {}, provider: null, model: null, options: { block_training: true },
       categories: new Set(Object.keys(CATEGORIES).filter((c) => CATEGORIES[c][2])), level: "balanced",
       history: [], busy: false,
+      remember: false, locked: false, protected: false, savedGarminKey: null,
+    };
+    const store = opts.vaultStore !== undefined ? opts.vaultStore : browserVaultStore();
+    const vault = store ? new Vault(store) : null;
+    let vaultReady = null;
+
+    // What gets remembered: keys, the chosen model and the "what the AI may see" settings.
+    const payload = () => ({
+      garmin_key: st.garmin && !st.garmin.isDemo ? st.garmin.key : st.savedGarminKey,
+      keys: { ...st.keys }, provider: st.provider, model: st.model, options: { ...st.options },
+      categories: [...st.categories], level: st.level,
+    });
+    const restore = (p) => {
+      st.keys = isObj(p.keys) ? Object.fromEntries(Object.entries(p.keys).filter(([k, v]) => Object.hasOwn(PROVIDERS, k) && typeof v === "string")) : {};
+      st.provider = Object.hasOwn(PROVIDERS, p.provider) ? p.provider : null;
+      st.model = st.provider && typeof p.model === "string" ? p.model : null;
+      if (isObj(p.options)) st.options.block_training = p.options.block_training !== false;
+      if (Array.isArray(p.categories)) st.categories = new Set(p.categories.filter((c) => Object.hasOwn(CATEGORIES, c)));
+      if (LEVELS.includes(p.level)) st.level = p.level;
+      st.savedGarminKey = opts.garminRelay && typeof p.garmin_key === "string" && p.garmin_key ? p.garmin_key : null;
+      st.remember = true; st.locked = false;
+    };
+    const persist = async () => { if (vault && st.remember && !st.locked) await vault.save(payload()); };
+    const initVault = () => {
+      if (!vaultReady) {
+        vaultReady = (async () => {
+          if (!vault) return;
+          const status = await vault.status();
+          if (!status.exists) return;
+          st.remember = true; st.protected = status.protected;
+          if (status.protected) { st.locked = true; return; }
+          try { restore(await vault.open()); } catch (e) { st.remember = false; await vault.forget(); }
+        })();
+      }
+      return vaultReady;
     };
     const snapshot = () => ({
-      version: "0.3.0", mode: opts.garminRelay ? "relay" : "browser",
-      garmin: { connected: st.garmin !== null, demo: Boolean(st.garmin && st.garmin.isDemo), token_expires_at: (st.garmin && st.garmin.tokenExpiresAt) || 0, saved_key: false, key_page: KEY_PAGE },
+      version: "0.4.0", mode: opts.garminRelay ? "relay" : "browser",
+      garmin: { connected: st.garmin !== null, demo: Boolean(st.garmin && st.garmin.isDemo), token_expires_at: (st.garmin && st.garmin.tokenExpiresAt) || 0, saved_key: Boolean(st.savedGarminKey) && !(st.garmin && !st.garmin.isDemo), key_page: KEY_PAGE },
       provider: { name: st.provider, model: st.model, has_key: Object.keys(st.keys).sort(), saved: [] },
       options: { ...st.options },
       categories: Object.entries(CATEGORIES).map(([id, [label, description]]) => ({ id, label, description, on: st.categories.has(id) })),
-      level: st.level, providers: publicInfo(), keystore: { available: false, remember: false },
+      level: st.level, providers: publicInfo(),
+      keystore: { available: Boolean(vault), remember: st.remember, protected: st.protected, locked: st.locked, kind: "browser" },
       busy: st.busy, turns: st.history.length, allowed_hosts: egress.allowedHosts(),
     });
     const fail = (message) => { throw new Error(message); };
 
     const routes = {
-      "/api/state": async () => snapshot(),
+      "/api/state": async () => { await initVault(); return snapshot(); },
+      "/api/keys/remember": async (b) => {
+        if (!vault) fail("This browser does not allow storage for this page (private window?).");
+        await initVault();
+        if (st.locked) fail("Unlock the saved keys first, or forget them.");
+        if (!b.on) { await vault.forget(); st.remember = false; st.protected = false; st.savedGarminKey = null; return snapshot(); }
+        const passphrase = String(b.passphrase || "");
+        if (passphrase && passphrase.length < 8) fail("Use a passphrase of at least 8 characters.");
+        await vault.setLock(passphrase);
+        st.remember = true; st.protected = Boolean(passphrase);
+        await persist();
+        return snapshot();
+      },
+      "/api/keys/unlock": async (b) => {
+        if (!vault) fail("Nothing is saved in this browser.");
+        await initVault();
+        if (!st.locked) return snapshot();
+        restore(await vault.open(String(b.passphrase || "")));
+        return snapshot();
+      },
+      "/api/keys/forget": async () => {
+        if (vault) await vault.forget();
+        st.remember = false; st.locked = false; st.protected = false; st.savedGarminKey = null;
+        return snapshot();
+      },
       "/api/garmin/connect": async (b) => {
         let client;
         if (b.demo) client = new DemoGarmin();
@@ -1160,12 +1313,23 @@ Formatting: short paragraphs, plain Markdown, tables only for small comparisons.
           // Plain static host: no relay, and Garmin refuses web pages. Stop here,
           // before any key is put on the network.
           fail("Garmin does not accept requests from web pages, so this page works on sample data only. Run the app on your computer to use your own data.");
-        } else { client = new GarminClient(b.api_key, egress, opts.garminRelay); await client.connect(); }
+        } else {
+          const key = b.use_saved ? st.savedGarminKey : b.api_key;
+          if (b.use_saved && !key) fail("No saved Garmin key found.");
+          client = new GarminClient(key, egress, opts.garminRelay);
+          await client.connect();
+        }
         if (st.garmin) st.garmin.forget();
         st.garmin = client; aliases.clear();
+        if (!client.isDemo) { st.savedGarminKey = client.key; await persist(); }
         return snapshot();
       },
-      "/api/garmin/disconnect": async () => { if (st.garmin) st.garmin.forget(); st.garmin = null; aliases.clear(); return snapshot(); },
+      "/api/garmin/disconnect": async () => {
+        if (st.garmin) st.garmin.forget();
+        st.garmin = null; st.savedGarminKey = null; aliases.clear();
+        await persist();  // disconnecting also removes the saved Garmin key
+        return snapshot();
+      },
       "/api/provider/models": async (b) => {
         const name = String(b.provider || "");
         if (!Object.hasOwn(PROVIDERS, name)) fail("Unknown provider.");
@@ -1174,12 +1338,14 @@ Formatting: short paragraphs, plain Markdown, tables only for small comparisons.
         const models = await listModels(name, key, egress);
         if (!models.length) fail("This account has no chat models that support tools.");
         if (key) st.keys[name] = key;
+        await persist();
         return { models, state: snapshot() };
       },
       "/api/provider/select": async (b) => {
         const name = String(b.provider || ""), model = String(b.model || "").trim();
         if (!Object.hasOwn(PROVIDERS, name) || !model || model.length > 200) fail("Choose a provider and a model.");
         st.provider = name; st.model = model;
+        await persist();
         return snapshot();
       },
       "/api/settings": async (b) => {
@@ -1189,6 +1355,7 @@ Formatting: short paragraphs, plain Markdown, tables only for small comparisons.
         }
         if ("level" in b) { if (!LEVELS.includes(b.level)) fail("Unknown privacy level."); st.level = b.level; }
         if ("block_training" in b) st.options.block_training = Boolean(b.block_training);
+        await persist();
         return snapshot();
       },
       "/api/chat/reset": async () => { st.history = []; return snapshot(); },
@@ -1196,6 +1363,8 @@ Formatting: short paragraphs, plain Markdown, tables only for small comparisons.
         if (st.garmin) st.garmin.forget();
         st.garmin = null; st.keys = {}; st.provider = st.model = null; st.history = [];
         aliases.clear(); ledger.clear(); egress.reset();
+        if (vault) await vault.forget();
+        st.remember = false; st.locked = false; st.protected = false; st.savedGarminKey = null;
         return snapshot();
       },
       "/api/ledger": async (b, q) => ({ entries: ledger.entries(Number(q.get("since")) || 0) }),
@@ -1236,7 +1405,7 @@ Formatting: short paragraphs, plain Markdown, tables only for small comparisons.
   }
 
   const api = {
-    createBackend, Ledger, Egress, GarminClient, DemoGarmin, AliasMap, Toolbox, Chat, PROVIDERS,
+    createBackend, Vault, Ledger, Egress, GarminClient, DemoGarmin, AliasMap, Toolbox, Chat, PROVIDERS,
     scrub, compact, aggregate, toTable, slimActivities, listModels, runTurn, cleanChart,
     EgressBlocked, GarminError, ProviderError, ToolError, HttpError, NetworkError,
   };
