@@ -257,7 +257,7 @@ button.link:hover { color: var(--ink); }
 .entry-meta { color: var(--ink-3); margin-top: 0.15rem; }
 .entry-meta .bad { color: var(--danger); }
 .sq { width: 0.55rem; height: 0.55rem; flex: none; display: inline-block; }
-.sq.garmin { background: var(--garmin); }
+.sq.garmin, .sq.garmin-relay { background: var(--garmin); }
 .sq.model { background: var(--out); }
 .sq.local-model { background: var(--local); }
 #save-log { margin-top: 0.75rem; }

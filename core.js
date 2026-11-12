@@ -90,13 +90,13 @@
       this.allowed = new Map();
       this.fetchImpl = fetchImpl || ((...a) => fetch(...a));
     }
-    allow(baseUrl, kind) { this.allowed.set(new URL(baseUrl).hostname, kind); }
+    allow(baseUrl, kind) { this.allowed.set(new URL(baseUrl).host, kind); }  // host includes any port
     allowedHosts() { return Object.fromEntries(this.allowed); }
     reset() { this.allowed.clear(); }
 
     async request(method, url, opts = {}) {
       const u = new URL(url);
-      const kind = this.allowed.get(u.hostname);
+      const kind = this.allowed.get(u.host);
       if (kind === undefined) throw new EgressBlocked(`Blocked request to "${u.hostname}": not on the allowlist`);
       if (u.protocol !== "https:" && !LOOPBACK.has(u.hostname)) {
         throw new EgressBlocked(`Blocked request to "${u.hostname}": HTTPS is required`);
@@ -139,10 +139,11 @@
   }
 
   // ── Garmin Connect Personal API (read-only) ────────────────────────────────
-  // Not reachable from the hosted page: Garmin sends no CORS headers, the page's
-  // Content-Security-Policy does not list Garmin, and createBackend() refuses a
-  // key unless a test supplies a loopback address. The client stays here, tested
-  // against a stand-in, so the page needs no rewrite if Garmin ever allows browsers.
+  // Garmin sends no CORS headers, so a page cannot call it directly. The client
+  // is used in one situation only: the page is served by the Cloudflare Worker
+  // in cloudflare/worker.js, which relays /garmin/* on the page's own address.
+  // On a plain static host (GitHub Pages) createBackend() refuses a Garmin key
+  // before anything is sent.
   const GARMIN_BASE = "https://personal.connectapi.garmin.com";
   const TOKEN_PATH = "/personalapitoken-service/personal-api/personal-api-key/token";
   const KEY_PAGE = "https://connect.garmin.com/app/settings/personalApiToken";
@@ -171,9 +172,11 @@
   const CACHE_TTL = 15 * 60 * 1000;
   const MIN_INTERVAL = 250;
   const GARMIN_UNREACHABLE =
-    "This browser could not reach Garmin's API. Garmin may not accept requests from web pages " +
-    "(a CORS restriction), or you are offline. The local version of this app does not have that " +
-    "limit: download it from the project page and run it on your computer.";
+    "Could not reach the relay that forwards requests to Garmin. Check your connection and try again.";
+  function relayRefusal(err) {
+    // The relay answers its own refusals as {"relay_error": "..."}.
+    try { const m = JSON.parse(err.body).relay_error; return m ? new GarminError(`The relay refused the request: ${m}`) : null; } catch (e) { return null; }
+  }
 
   function jwtExp(token) {
     try {
@@ -184,15 +187,21 @@
   }
 
   class GarminClient {
-    constructor(apiKey, egress, testBaseUrl) {
+    /** baseUrl: the same-origin relay address, or a loopback stand-in in tests. */
+    constructor(apiKey, egress, baseUrl) {
       const key = String(apiKey || "").trim();
       if (!key) throw new GarminError("Paste your Garmin Personal API key first.");
       this.key = key;
       this.egress = egress;
       this.isDemo = false;
-      // Only a loopback address may replace Garmin's host, and only for tests.
-      this.baseUrl = testBaseUrl && LOOPBACK.has(new URL(testBaseUrl).hostname) ? testBaseUrl.replace(/\/$/, "") : GARMIN_BASE;
-      egress.allow(this.baseUrl, "garmin");
+      const u = baseUrl ? new URL(baseUrl) : null;
+      const sameOrigin = u && typeof location !== "undefined" && u.origin === location.origin;
+      if (!u || !(sameOrigin || LOOPBACK.has(u.hostname))) {
+        throw new GarminError("Garmin can only be reached through this page's own relay.");
+      }
+      this.baseUrl = baseUrl.replace(/\/$/, "");
+      this.relayHeaders = { "X-Coach-Relay": "1" };
+      egress.allow(this.baseUrl, "garmin-relay");
       this.token = null;
       this.tokenExpiresAt = 0;
       this.cache = new Map();
@@ -206,11 +215,12 @@
       let res;
       try {
         res = await this.egress.request("POST", this.baseUrl + TOKEN_PATH, {
-          headers: { Accept: "*/*", Authorization: `ApiKey ${this.key}` },
+          headers: { ...this.relayHeaders, Accept: "*/*", Authorization: `ApiKey ${this.key}` },
           timeout: 30000, note: "Exchange API key for a 24-hour access token",
         });
       } catch (err) {
         if (err instanceof NetworkError) throw new GarminError(GARMIN_UNREACHABLE);
+        if (err instanceof HttpError && relayRefusal(err)) throw relayRefusal(err);
         if (err instanceof HttpError && (err.status === 401 || err.status === 403)) {
           throw new GarminError(`Garmin rejected this API key. It may be mistyped, expired or deleted. Create a new one at ${KEY_PAGE}`);
         }
@@ -253,11 +263,12 @@
       let res;
       try {
         res = await this.egress.request("GET", url, {
-          headers: { Accept: "application/json", Authorization: `Bearer ${token}` }, timeout: 45000,
+          headers: { ...this.relayHeaders, Accept: "application/json", Authorization: `Bearer ${token}` }, timeout: 45000,
         });
       } catch (err) {
         if (err instanceof NetworkError) throw new GarminError(GARMIN_UNREACHABLE);
         if (!(err instanceof HttpError)) throw err;
+        if (relayRefusal(err)) throw relayRefusal(err);
         if (err.status === 401 && retry) { await this.refreshToken(true); return this.getUncached(path, query, false); }
         if (err.status === 429) throw new GarminError("Garmin is rate-limiting requests. Wait a minute and try again.");
         if (err.status === 400 || err.status === 404) {
@@ -1130,7 +1141,7 @@ Formatting: short paragraphs, plain Markdown, tables only for small comparisons.
       history: [], busy: false,
     };
     const snapshot = () => ({
-      version: "0.2.0", mode: "browser",
+      version: "0.3.0", mode: opts.garminRelay ? "relay" : "browser",
       garmin: { connected: st.garmin !== null, demo: Boolean(st.garmin && st.garmin.isDemo), token_expires_at: (st.garmin && st.garmin.tokenExpiresAt) || 0, saved_key: false, key_page: KEY_PAGE },
       provider: { name: st.provider, model: st.model, has_key: Object.keys(st.keys).sort(), saved: [] },
       options: { ...st.options },
@@ -1145,11 +1156,11 @@ Formatting: short paragraphs, plain Markdown, tables only for small comparisons.
       "/api/garmin/connect": async (b) => {
         let client;
         if (b.demo) client = new DemoGarmin();
-        else if (!opts.garminBaseUrl) {
-          // Garmin's API refuses requests from web pages (no CORS headers), confirmed
-          // November 2026. Refuse here, before any key is put on the network.
+        else if (!opts.garminRelay) {
+          // Plain static host: no relay, and Garmin refuses web pages. Stop here,
+          // before any key is put on the network.
           fail("Garmin does not accept requests from web pages, so this page works on sample data only. Run the app on your computer to use your own data.");
-        } else { client = new GarminClient(b.api_key, egress, opts.garminBaseUrl); await client.connect(); }
+        } else { client = new GarminClient(b.api_key, egress, opts.garminRelay); await client.connect(); }
         if (st.garmin) st.garmin.forget();
         st.garmin = client; aliases.clear();
         return snapshot();
