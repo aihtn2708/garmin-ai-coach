@@ -12,7 +12,7 @@ of how much you have to trust anything outside your own computer.
 | How Garmin is reached | Directly from a Python program on your computer | Through the Worker's relay, in your Cloudflare account | Never |
 | Who sees your Garmin key and data in transit | You and Garmin | You, Garmin, and Cloudflare's network (the Worker forwards and keeps nothing) | Nobody; never asked for |
 | Where keys are held | Python program's memory; the page never holds them | The browser tab's memory | AI key only, in the tab's memory |
-| Keys between sessions | Optional OS keychain | Never stored | Never stored |
+| Keys between sessions | Not kept, unless you opt in to the OS keychain | Not kept, unless you opt in to encrypted storage in that browser | Same as Cloudflare, AI keys only |
 
 Garmin's API refuses requests from web pages (it sends no CORS headers), so a page
 needs something on a server to reach it. The local app is that something on your
@@ -27,15 +27,42 @@ project never uses a relay run by anyone else, and neither should you.
 | AI provider keys | Program memory | Tab memory; never sent to the Worker | Tab memory | Same |
 | Garmin data fetched for a question | Program memory (15-minute cache) | Tab memory; passes through the Worker once | Sample data | Same |
 | Conversation and outbound log | Tab and program memory | Tab memory | Tab memory | Same; you can export them |
-| Disk, cookies, localStorage, sessionStorage, Worker storage | Nothing, unless you opt in to the OS keychain | Nothing | Nothing | |
+| Browser storage or disk | Nothing, unless you opt in to the OS keychain | Nothing, unless you tick "Remember keys on this device" (then encrypted, see below) | Same as Cloudflare | Until you untick the box or click "Forget everything" |
+| Cookies, Worker storage | Nothing | Nothing | Nothing | |
 
 There is no database, no cloud storage, no account, no analytics and no telemetry.
 GitHub serves the demo page's files and so sees that your IP address loaded them, as
 any web host does. It never receives your keys or your questions.
 
+## Remembering keys on this device
+
+Off by default. When you tick the box in the Cloudflare version or the demo:
+
+- **What is saved:** your Garmin key (Cloudflare version only), AI provider keys,
+  the chosen model and the "what the AI may see" settings. Never your Garmin
+  data, your questions or the answers.
+- **Where:** in that browser's own storage for the page's address. It is not
+  synced, not sent to the Worker, and not sent anywhere else.
+- **How:** encrypted with AES-256-GCM through the browser's built-in Web Crypto.
+- **With a passphrase:** the encryption key is derived from it (PBKDF2-SHA256,
+  600,000 rounds) and is never stored. Without the passphrase the saved keys
+  cannot be opened, by the page or by someone holding a copy of the browser's
+  files. A weak passphrase can be guessed, so use a long one.
+- **Without a passphrase:** the encryption key is a non-exportable key object in
+  the same browser. That keeps the keys from being read as plain text out of
+  storage or a backup, but anyone who can open the page in that browser profile
+  can use them. Fine on a device only you use; add a passphrase otherwise.
+- **To erase:** untick the box, click "Forget saved keys" on the unlock prompt, or
+  click "Forget everything". Disconnecting Garmin removes the saved Garmin key.
+  Clearing the site's data in the browser does the same.
+
+What this does not protect against: code running inside the page while it is
+unlocked (a malicious browser extension, or a changed copy of the app). The local
+app keeps keys out of the page altogether, in memory or in the OS keychain.
+
 ## What leaves your computer
 
-Only two kinds of request, both listed live in the "What left this computer" panel:
+Only two kinds of request, both listed in the data log (the button in the top bar):
 
 1. **To Garmin** (`personal.connectapi.garmin.com`): your key, to get a token; then
    read-only requests for your own data. From the local app these go direct. From
@@ -87,7 +114,8 @@ check.
 | The app is tricked into calling another host | One function makes all connections and refuses any host not on the allowlist (Garmin plus the selected provider); HTTPS is required; redirects are refused; no cookies are sent |
 | Something writes to your Garmin account | Only GET requests to a fixed list of read-only paths are possible |
 | Keys end up in logs | Keys travel in request headers, which are never recorded |
-| Keys linger | Memory only; "Forget everything" clears keys, data, conversation and log |
+| Keys linger | Memory only unless you opt in to remembering them; "Forget everything" clears keys (saved ones too), data, conversation and log |
+| A font or other asset phones home | The typeface is served from the app's own folder; the policy allows fonts from the page's own address only |
 
 ## Extra controls in the local app
 

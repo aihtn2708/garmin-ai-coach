@@ -41,10 +41,14 @@ STATIC = {
     "/style.css": ("style.css", "text/css; charset=utf-8"),
     "/favicon.svg": ("favicon.svg", "image/svg+xml"),
 }
+for _subset in ("latin", "latin-ext", "vietnamese"):
+    for _style in ("600-normal", "700-italic"):
+        _name = f"fonts/barlow-condensed-{_subset}-{_style}.woff2"
+        STATIC[f"/{_name}"] = (_name, "font/woff2")
 MAX_BODY = 64 * 1024
 MAX_MESSAGE_CHARS = 4000
 CSP = (
-    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+    "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; "
     "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 )
 

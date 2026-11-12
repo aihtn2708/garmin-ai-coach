@@ -120,15 +120,24 @@
     for (const r of document.querySelectorAll('input[name="level"]')) r.checked = r.value === state.level;
     $("step-scope").classList.add("done");
 
-    $("remember-wrap").hidden = !state.keystore.available;
-    $("remember").checked = state.keystore.remember;
-    $("remember-off").hidden = state.keystore.remember;
+    const ks = state.keystore;
+    const inBrowser = ks.kind === "browser";
+    $("remember-wrap").hidden = !ks.available;
+    $("remember").checked = ks.remember;
+    $("remember").disabled = Boolean(ks.locked);
+    $("remember-label").textContent = inBrowser ? "Remember keys on this device" : "Remember keys in this computer's keychain";
+    $("remember-off").hidden = ks.remember;
+    $("remember-on").hidden = !(ks.remember && inBrowser && !ks.locked);
+    $("remember-how").textContent = ks.protected
+      ? "Saved keys are encrypted with your passphrase. You will be asked for it when you come back."
+      : "Saved keys are encrypted and kept in this browser. Anyone who can use this browser profile can use them, so add a passphrase on a shared device.";
+    document.querySelector('label[for="remember-pass"]').textContent = ks.protected ? "Change the passphrase" : "Lock with a passphrase (optional)";
+    $("unlock-box").hidden = !ks.locked;
 
-    const p = state.provider.name ? state.providers[state.provider.name] : null;
-    $("top-status").textContent = [
-      g.connected ? (g.demo ? "Sample data" : "Garmin connected") : "Garmin not connected",
-      ready ? `${p.label}: ${state.provider.model}` : "No model chosen",
-    ].join("  |  ");
+    const chip = (on, text) => h("span", { class: `chip${on ? " on" : ""}` }, h("span", { class: "dot" }), text);
+    $("top-status").replaceChildren(
+      chip(g.connected, g.connected ? (g.demo ? "Sample data" : "Garmin connected") : "Garmin not connected"),
+      chip(ready, ready ? state.provider.model : "No model chosen"));
     updateComposer();
   }
 
@@ -230,8 +239,34 @@
   $("or-block").onchange = saveScope;
   for (const r of document.querySelectorAll('input[name="level"]')) r.onchange = saveScope;
   $("remember").onchange = async (e) => {
-    try { render(await api("/api/keys/remember", { on: e.target.checked })); } catch (err) { e.target.checked = false; }
+    showError("remember-error", null);
+    try { render(await api("/api/keys/remember", { on: e.target.checked })); }
+    catch (err) { e.target.checked = !e.target.checked; $("remember-on").hidden = false; showError("remember-error", err); }
   };
+  $("remember-lock").onclick = async (e) => {
+    showError("remember-error", null);
+    try {
+      render(await withButton(e.target, "Locking", () => api("/api/keys/remember", { on: true, passphrase: $("remember-pass").value })));
+      $("remember-pass").value = "";
+    } catch (err) { showError("remember-error", err); }
+  };
+  $("remember-pass").onkeydown = (e) => { if (e.key === "Enter") $("remember-lock").click(); };
+  $("unlock-go").onclick = async (e) => {
+    showError("unlock-error", null);
+    try {
+      render(await withButton(e.target, "Unlocking", () => api("/api/keys/unlock", { passphrase: $("unlock-pass").value })));
+      $("unlock-pass").value = "";
+      await afterRestore();
+    } catch (err) { showError("unlock-error", err); }
+  };
+  $("unlock-pass").onkeydown = (e) => { if (e.key === "Enter") $("unlock-go").click(); };
+  $("unlock-forget").onclick = async () => { showError("unlock-error", null); render(await api("/api/keys/forget", {})); };
+
+  // Saved keys just became available: show the saved model and reconnect Garmin.
+  async function afterRestore() {
+    if (state.provider.name) { $("provider").value = state.provider.name; renderProvider(); }
+    if (state.garmin.saved_key && !state.garmin.connected) await connectGarmin({ use_saved: true }, $("garmin-saved"));
+  }
 
   let wipeArmed = 0;
   $("wipe").onclick = async (e) => {
@@ -306,6 +341,7 @@
     $("question").value = "";
     let pending = null;
     let answer = "";
+    let tokens = "";
 
     const handle = (ev) => {
       if (ev.type === "status") working.textContent = ev.text;
@@ -320,7 +356,7 @@
       } else if (ev.type === "chart") body.append(renderChart(ev.chart));
       else if (ev.type === "answer") { answer = ev.text; body.append(...markdown(ev.text)); }
       else if (ev.type === "error") body.append(h("p", { class: "error", text: ev.text }));
-      else if (ev.type === "usage" && (ev.tokens_in || ev.tokens_out)) msg.append(h("p", { class: "usage", text: `${num(ev.tokens_in)} tokens in, ${num(ev.tokens_out)} tokens out` }));
+      else if (ev.type === "usage" && (ev.tokens_in || ev.tokens_out)) tokens = `${num(ev.tokens_in)} tokens in, ${num(ev.tokens_out)} tokens out`;
       thread.scrollTop = thread.scrollHeight;
     };
 
@@ -331,6 +367,8 @@
       body.append(h("p", { class: "error", text: err.message || String(err) }));
     }
     working.remove();
+    msg.append(h("p", { class: "usage" }, tokens ? h("span", { text: tokens }) : null,
+      h("button", { type: "button", class: "link", text: "See what left this computer", onclick: () => showLog() })));
     transcript.push({ question, answer });
     busy = false;
     updateComposer();
@@ -588,7 +626,24 @@
     } catch (e) { /* server stopped */ }
   }
 
+  // The log stays out of the way until asked for.
+  const layout = document.querySelector(".layout");
+  const narrow = matchMedia("(max-width: 62rem)");
+  function setLog(open) {
+    layout.dataset.log = open ? "open" : "closed";
+    $("log-toggle").setAttribute("aria-expanded", String(open));
+    $("log-toggle-label").textContent = open ? "Hide data log" : "Show data log";
+  }
+  function showLog() {
+    setLog(true);
+    if (narrow.matches) document.querySelector('.tabs button[data-tab="log"]').click();
+    else $("panel-log").scrollTop = 0;
+  }
+  $("log-toggle").onclick = () => setLog(layout.dataset.log !== "open");
+  $("log-hide").onclick = () => setLog(false);
+
   function renderLog() {
+    $("log-count").textContent = String(entries.length);
     $("log-empty").hidden = entries.length > 0;
     const totals = {};
     for (const e of entries) {
@@ -638,11 +693,11 @@
       document.body.classList.add("mode-relay");
       $("brand-where").textContent = "running in this browser tab, reaching Garmin through your Cloudflare Worker";
       $("welcome-text").textContent =
-        "Your keys stay in this tab's memory and are forgotten when you close or reload it. Requests for your " +
+        "Your keys stay in this tab's memory unless you choose to remember them on this device. Requests for your " +
         "Garmin data pass through the Cloudflare Worker that serves this page, which forwards them to Garmin " +
         "and stores nothing. Questions and filtered data go straight from this tab to the AI model you choose. " +
-        "The log on the right shows every request.";
-      $("remember-off").textContent = "Keys are held in this tab's memory and forgotten when you close or reload it.";
+        "Open the data log to see every request.";
+      $("remember-off").textContent = "Keys are held in this tab's memory and forgotten when you close or reload it, unless you tick the box above.";
       $("quit").hidden = true;
     }
     if (mode === "browser") {
@@ -657,8 +712,8 @@
         "This page is a demo on built-in sample data. Garmin does not let web pages read your account, " +
         "so to ask about your own training, run the app on your computer (three commands, on the left). " +
         "The AI part here is real: add a model key and it analyses the sample data. The key goes straight " +
-        "from this tab to the provider you choose and is forgotten when you close or reload the tab.";
-      $("remember-off").textContent = "Keys are held in this tab's memory and forgotten when you close or reload it.";
+        "from this tab to the provider you choose.";
+      $("remember-off").textContent = "Keys are held in this tab's memory and forgotten when you close or reload it, unless you tick the box above.";
       $("quit").hidden = true;
       await api("/api/garmin/connect", { demo: true });
     }
@@ -667,6 +722,7 @@
       const first = await api("/api/state");
       // A fresh tab starts a fresh conversation, so the server's context matches the screen.
       render(first.turns ? await api("/api/chat/reset", {}) : first);
+      if (backend) await afterRestore();
       pollLog();
       setInterval(() => { if (!document.hidden) pollLog(); }, backend ? 1000 : 2500);
     } catch (err) {

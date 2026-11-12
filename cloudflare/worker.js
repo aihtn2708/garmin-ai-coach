@@ -40,7 +40,7 @@ const ALLOWED_GET = [
 
 const PAGE_HEADERS = {
   "Content-Security-Policy":
-    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
+    "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; " +
     "connect-src 'self' https://generativelanguage.googleapis.com https://openrouter.ai " +
     "https://api.anthropic.com https://api.deepseek.com http://127.0.0.1:11434 http://localhost:11434; " +
     "base-uri 'none'; form-action 'none'; frame-ancestors 'none'",

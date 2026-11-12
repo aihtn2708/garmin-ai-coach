@@ -278,3 +278,103 @@ test("relay mode in the page engine: Garmin through the relay address, end to en
     assert.ok(!JSON.stringify(entries).includes("good-key"));
   } finally { core.PROVIDERS.gemini.base_url = saved; }
 });
+
+// ── remembering keys on this device ─────────────────────────────────────────
+const memStore = () => {
+  let text = null, device = null;
+  return {
+    read: async () => text, write: async (t) => { text = t; }, clear: async () => { text = null; device = null; },
+    getDeviceKey: async () => device, setDeviceKey: async (k) => { device = k; },
+    peek: () => text, poke: (t) => { text = t; },
+  };
+};
+
+test("keys are written to storage only after opting in, and only encrypted", async () => {
+  const saved = core.PROVIDERS.gemini.base_url;
+  core.PROVIDERS.gemini.base_url = urls.openai;
+  try {
+    const store = memStore();
+    const a = core.createBackend({ garminRelay: urls.garmin, vaultStore: store });
+    await a.api("/api/state");
+    await a.api("/api/garmin/connect", { api_key: "good-key" });
+    await a.api("/api/provider/models", { provider: "gemini", api_key: "model-secret-123" });
+    await a.api("/api/provider/select", { provider: "gemini", model: "gemini-9.9-flash" });
+    assert.equal(store.peek(), null, "nothing may be stored before the user opts in");
+
+    const on = await a.api("/api/keys/remember", { on: true });
+    assert.deepEqual([on.keystore.remember, on.keystore.protected, on.keystore.locked], [true, false, false]);
+    assert.ok(store.peek() && !store.peek().includes("good-key") && !store.peek().includes("model-secret-123"));
+    await a.api("/api/settings", { level: "strict" });  // later changes are saved too
+
+    // A new tab on the same device: keys, model and settings come back without typing.
+    const b = core.createBackend({ garminRelay: urls.garmin, vaultStore: store });
+    const st = await b.api("/api/state");
+    assert.deepEqual(st.provider.has_key, ["gemini"]);
+    assert.equal(st.provider.model, "gemini-9.9-flash");
+    assert.equal(st.level, "strict");
+    assert.equal(st.garmin.saved_key, true);
+    assert.ok(!JSON.stringify(st).includes("good-key") && !JSON.stringify(st).includes("model-secret-123"));
+    assert.equal((await b.api("/api/garmin/connect", { use_saved: true })).garmin.connected, true);
+
+    // Disconnecting Garmin removes its saved key; unticking removes everything.
+    await b.api("/api/garmin/disconnect", {});
+    const c = core.createBackend({ garminRelay: urls.garmin, vaultStore: store });
+    assert.equal((await c.api("/api/state")).garmin.saved_key, false);
+    await c.api("/api/keys/remember", { on: false });
+    assert.equal(store.peek(), null);
+  } finally { core.PROVIDERS.gemini.base_url = saved; }
+});
+
+test("with a passphrase, saved keys stay locked until it is typed; tampering is detected", async () => {
+  const saved = core.PROVIDERS.gemini.base_url;
+  core.PROVIDERS.gemini.base_url = urls.openai;
+  try {
+    const store = memStore();
+    const a = core.createBackend({ garminRelay: urls.garmin, vaultStore: store });
+    await a.api("/api/provider/models", { provider: "gemini", api_key: "model-secret-123" });
+    await assert.rejects(a.api("/api/keys/remember", { on: true, passphrase: "short" }), /at least 8/);
+    const on = await a.api("/api/keys/remember", { on: true, passphrase: "correct horse battery" });
+    assert.equal(on.keystore.protected, true);
+    assert.equal(await store.getDeviceKey(), null, "no device key exists in passphrase mode");
+
+    const b = core.createBackend({ garminRelay: urls.garmin, vaultStore: store });
+    const locked = await b.api("/api/state");
+    assert.deepEqual([locked.keystore.locked, locked.provider.has_key.length], [true, 0]);
+    await assert.rejects(b.api("/api/keys/unlock", { passphrase: "wrong guess here" }), /Wrong passphrase/);
+    await assert.rejects(b.api("/api/keys/remember", { on: false }), /Unlock the saved keys first/);
+    const open = await b.api("/api/keys/unlock", { passphrase: "correct horse battery" });
+    assert.deepEqual([open.keystore.locked, open.provider.has_key], [false, ["gemini"]]);
+
+    // Flip one character of the ciphertext: decryption must fail, not return garbage.
+    const blob = JSON.parse(store.peek());
+    blob.ct = (blob.ct[0] === "A" ? "B" : "A") + blob.ct.slice(1);
+    store.poke(JSON.stringify(blob));
+    const c = core.createBackend({ garminRelay: urls.garmin, vaultStore: store });
+    await c.api("/api/state");
+    await assert.rejects(c.api("/api/keys/unlock", { passphrase: "correct horse battery" }), /Wrong passphrase/);
+
+    // "Forget saved keys" works while locked; "Forget everything" also clears storage.
+    assert.equal((await c.api("/api/keys/forget", {})).keystore.remember, false);
+    assert.equal(store.peek(), null);
+    const d = core.createBackend({ vaultStore: store });
+    await d.api("/api/provider/models", { provider: "gemini", api_key: "k2-secret-456" });
+    await d.api("/api/keys/remember", { on: true });
+    assert.ok(store.peek());
+    await d.api("/api/wipe", {});
+    assert.equal(store.peek(), null);
+  } finally { core.PROVIDERS.gemini.base_url = saved; }
+});
+
+test("the demo page never remembers a Garmin key, and no storage means the option is off", async () => {
+  const store = memStore();
+  const vault = new core.Vault(store);
+  await vault.setLock("");
+  await vault.save({ garmin_key: "sneaky-key", keys: {}, provider: null, model: null });
+  const demo = core.createBackend({ vaultStore: store });  // no relay
+  const st = await demo.api("/api/state");
+  assert.equal(st.garmin.saved_key, false);
+  await assert.rejects(demo.api("/api/garmin/connect", { use_saved: true }), /sample data only/);
+  const none = core.createBackend({ vaultStore: null });
+  assert.equal((await none.api("/api/state")).keystore.available, false);
+  await assert.rejects(none.api("/api/keys/remember", { on: true }), /does not allow storage/);
+});

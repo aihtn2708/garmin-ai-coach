@@ -5,9 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <!-- The browser enforces this list: the page can only load its own files and can only
-     connect to the model providers below and to Ollama on this computer. Garmin is not
-     listed: Garmin refuses requests from web pages, so this page never sends it anything. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://generativelanguage.googleapis.com https://openrouter.ai https://api.anthropic.com https://api.deepseek.com http://127.0.0.1:11434 http://localhost:11434; base-uri 'none'; form-action 'none'">
+     connect to its own address, the model providers below, and Ollama on this computer.
+     Garmin is not listed, because Garmin refuses requests from web pages. On the
+     Cloudflare version Garmin is reached through the page's own address. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self' https://generativelanguage.googleapis.com https://openrouter.ai https://api.anthropic.com https://api.deepseek.com http://127.0.0.1:11434 http://localhost:11434; base-uri 'none'; form-action 'none'">
 <title>Garmin AI Coach</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
@@ -24,11 +25,25 @@
     <button type="button" data-tab="log">Log</button>
   </nav>
   <div class="top-status" id="top-status" aria-live="polite"></div>
+  <button type="button" class="log-toggle" id="log-toggle" aria-expanded="false" aria-controls="panel-log">
+    <span id="log-toggle-label">Show data log</span><span class="count" id="log-count">0</span>
+  </button>
 </header>
+<div class="lane" aria-hidden="true"></div>
 
-<main class="layout" data-view="chat">
+<main class="layout" data-view="chat" data-log="closed">
   <!-- ───────────── Setup ───────────── -->
   <aside class="setup" id="panel-setup" aria-label="Setup">
+    <section class="unlock" id="unlock-box" hidden>
+      <h2>Saved keys are locked</h2>
+      <label for="unlock-pass">Passphrase</label>
+      <input id="unlock-pass" type="password" autocomplete="off" spellcheck="false">
+      <div class="row">
+        <button type="button" class="primary" id="unlock-go">Unlock</button>
+        <button type="button" id="unlock-forget">Forget saved keys</button>
+      </div>
+      <p class="error" id="unlock-error" role="alert" hidden></p>
+    </section>
     <section class="step" id="step-garmin">
       <h2><span class="step-n">1</span><span id="garmin-title">Connect Garmin</span></h2>
       <div id="garmin-off">
@@ -105,11 +120,21 @@ python run.py</pre>
     </section>
 
     <section class="step step-end">
+      <h2 class="plain">Your keys</h2>
       <label class="check" id="remember-wrap" hidden>
         <input type="checkbox" id="remember">
-        <span>Remember keys in this computer's keychain</span>
+        <span id="remember-label">Remember keys on this device</span>
       </label>
       <p class="hint" id="remember-off">Keys are held in memory and forgotten when you quit.</p>
+      <div id="remember-on" hidden>
+        <p class="hint" id="remember-how"></p>
+        <div id="pass-wrap">
+          <label for="remember-pass">Lock with a passphrase (optional)</label>
+          <input id="remember-pass" type="password" autocomplete="off" spellcheck="false" placeholder="At least 8 characters">
+          <button type="button" id="remember-lock">Lock saved keys</button>
+        </div>
+        <p class="error" id="remember-error" role="alert" hidden></p>
+      </div>
       <div class="row">
         <button type="button" id="wipe">Forget everything</button>
         <button type="button" id="quit">Quit</button>
@@ -125,7 +150,7 @@ python run.py</pre>
       <div class="welcome" id="welcome">
         <h1>Ask your training data a question.</h1>
         <p id="welcome-text">Your Garmin data is fetched and filtered here. Only the figures needed to answer
-          are sent to the model you choose, and the log on the right shows every request.</p>
+          are sent to the model you choose. Open the data log to see every request that leaves this computer.</p>
         <div class="suggest" id="suggest"></div>
       </div>
     </div>
@@ -144,7 +169,10 @@ python run.py</pre>
 
   <!-- ───────────── Log ───────────── -->
   <aside class="log" id="panel-log" aria-label="Outbound request log">
-    <h2>What left this computer</h2>
+    <div class="log-head">
+      <h2>What left this computer</h2>
+      <button type="button" class="link" id="log-hide">Hide</button>
+    </div>
     <dl class="totals" id="totals"></dl>
     <ol class="entries" id="entries"></ol>
     <p class="hint" id="log-empty">Nothing yet. Every request to Garmin or to an AI provider will be listed here.</p>

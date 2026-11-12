@@ -48,6 +48,8 @@ What to know before you choose this over the local app:
   ([`cloudflare/worker.js`](cloudflare/worker.js) is about 100 lines; read it), but
   they do transit Cloudflare's network in your account.
 - Keys are held in the browser tab's memory, not in a program on your computer.
+  If you tick "Remember keys on this device" they are also kept, encrypted, in
+  that browser.
 - The free plan allows 100,000 Worker requests a day. A question uses a handful.
   Scripts, styles and images do not count.
 - Not yet tried against the real Garmin service. If Garmin turns away requests that
@@ -75,6 +77,10 @@ you close or reload the tab.
    data" to look around first.
 2. **Choose an AI model.** Pick a provider, paste its API key, click "Load models".
 3. **Decide what the AI may see**, then ask a question.
+
+The **data log** button in the top bar opens a panel listing every request that
+left your computer, with the exact content sent to the AI model. It stays hidden
+until you want it.
 
 ## Which model to use
 
@@ -132,8 +138,8 @@ fetches from Garmin, filters the result and passes it on.
 
 | File | Job |
 |---|---|
-| `docs/index.html`, `app.js`, `style.css` | The interface, shared by both versions. No libraries |
-| `docs/core.js` | Cloudflare and demo: Garmin client (via relay), sample data, privacy filter, tools, providers, agent, log |
+| `docs/index.html`, `app.js`, `style.css`, `fonts/` | The interface, shared by all versions. No libraries; the one typeface (Barlow Condensed, SIL Open Font License) is served from the same folder |
+| `docs/core.js` | Cloudflare and demo: Garmin client (via relay), sample data, privacy filter, tools, providers, agent, log, encrypted key vault |
 | `cloudflare/worker.js`, `wrangler.jsonc` | Cloudflare Worker: serves the page, relays read-only Garmin requests |
 | `run.py` | Starts the local app |
 | `coach/server.py` | Local web server and its protections |
@@ -154,7 +160,7 @@ Security and governance details are in [SECURITY.md](SECURITY.md).
 
 ```
 python -m unittest discover -s tests -t . -v     # local app, 19 tests
-node --test tests/test_core.js                   # page engine and Cloudflare relay, 12 tests
+node --test tests/test_core.js                   # page engine, key vault and Cloudflare relay, 15 tests
 ```
 
 Tested:
@@ -169,9 +175,12 @@ Tested:
 - the Cloudflare Worker in Cloudflare's own runtime on a test machine: the page,
   its security headers, and the relay refusing every request that is off its
   list or not from its own page;
-- all three versions in Chrome, including that the pages store nothing, that the
-  demo never sends a Garmin key, and that the browser blocks connections to
-  unlisted hosts.
+- remembering keys: nothing is stored without opting in, stored keys are never
+  readable as plain text, a wrong passphrase or altered data fails to open, and
+  "Forget everything" erases them;
+- all three versions in Chrome, including that the pages store nothing by
+  default, that the demo never sends a Garmin key, and that the browser blocks
+  connections to unlisted hosts.
 
 Not tested: anything with a real Garmin key or a real provider key, and the Worker
 on Cloudflare's real network. None were available while building this, so expect
@@ -201,17 +210,22 @@ rough edges on first contact. Likely places:
   account, keep it to yourself, and never use someone else's deployment.
 - This is not medical advice.
 
-## Optional: remember keys between sessions
+## Remembering your keys
 
-By default you paste keys each time you start the app. To store them in your
-operating system's keychain instead:
+By default you paste keys each time, and they are forgotten when you leave.
+
+**On Cloudflare and in the demo:** tick **Remember keys on this device** at the
+bottom of the setup panel. Your keys, chosen model and settings are encrypted and
+kept in that browser, and Garmin reconnects by itself next time. Add a passphrase
+if anyone else uses the same browser; you will be asked for it on each visit.
+Untick the box, or click "Forget everything", to erase them.
+
+**Local app:** install the optional keychain helper, restart, and tick the box.
+Keys go into your operating system's keychain.
 
 ```
 pip install keyring
 ```
-
-Restart the app and tick "Remember keys in this computer's keychain". The hosted
-demo never stores keys.
 
 ## Updating the hosted demo
 
