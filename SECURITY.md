@@ -3,6 +3,10 @@
 The design goal: your Garmin data and your keys stay under your control, and you
 can see everything that leaves your computer.
 
+This file describes each control and its limits. The trade-offs the owner chose to
+accept, and how to avoid each one, are summarised in the README under
+[Security trade-offs accepted](README.md#security-trade-offs-accepted).
+
 There are three versions with the same interface and the same filtering, in order
 of how much you have to trust anything outside your own computer.
 
@@ -186,8 +190,9 @@ What it cannot protect against:
 - Field-name filtering can miss an identifier with an unexpected name.
 - Neither Python nor JavaScript can reliably erase secrets from memory; "forgotten" means dereferenced
   and gone when the process exits.
-- Nothing has yet been tested against live Garmin or provider endpoints, and the
-  Worker has only been run in Cloudflare's runtime on a test machine (see the README).
+- The Cloudflare version has been used with a real Garmin key and AI provider since
+  12 November 2026. The local app and most providers have not yet been tried with
+  real keys (see the README).
 - No independent security review has been done.
 
 ## Reporting a problem
